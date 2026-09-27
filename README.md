@@ -23,11 +23,15 @@ pnpm test           # 领域/同步单测
 # 后端(默认零配置嵌入式 PGlite,数据落 apps/server/data/)
 cd apps/server
 npx drizzle-kit push        # 建表
-node dist/main.js           # http://localhost:3000
+pnpm start                   # http://localhost:60505(先 pnpm build)
 
 # Web
 cd apps/web
-pnpm dev                    # http://localhost:5173
+pnpm dev                    # http://localhost:60500
+
+# App(Expo SDK 57)
+cd apps/mobile
+pnpm start                  # 需 Expo 开发环境/模拟器
 ```
 
 标准 PostgreSQL:`docker compose up -d` 后设 `DATABASE_URL=postgres://postgres:ledgerone@localhost:5432/ledgerone` 再 `drizzle-kit push`。

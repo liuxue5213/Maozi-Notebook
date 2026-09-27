@@ -6,16 +6,19 @@ const REFRESH_KEY = 'lo_refresh';
 const UID_KEY = 'lo_uid';
 
 export function defaultServerUrl(): string {
-  const { protocol, hostname, port, origin } = window.location;
-  // 开发环境(Vite 5173)指向本机后端 3000;生产同域部署时直接用当前域名
-  if (import.meta.env.DEV && port === '5173') {
-    return `${protocol}//${hostname}:3000`;
+  const { protocol, hostname, origin } = window.location;
+  // 开发环境前端 60500 / 后端 60505 分端口;生产同域部署时直接用当前域名
+  if (import.meta.env.DEV) {
+    return `${protocol}//${hostname}:60505`;
   }
   return origin;
 }
 
 export function getServerBase(): string {
-  return localStorage.getItem(SERVER_KEY) || defaultServerUrl();
+  const stored = localStorage.getItem(SERVER_KEY);
+  // 旧默认端口 3000 的存留值视为未配置,自动切到新默认
+  if (!stored || stored === 'http://localhost:3000') return defaultServerUrl();
+  return stored;
 }
 export function setServerBase(v: string): void {
   localStorage.setItem(SERVER_KEY, v.trim().replace(/\/+$/, ''));

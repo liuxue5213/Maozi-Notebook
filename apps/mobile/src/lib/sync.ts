@@ -1,6 +1,6 @@
 import type { SyncTransport } from '@ledgerone/domain';
 import { SyncEngine, type SyncEngineSnapshot } from '@ledgerone/sync';
-import { createChangeQueue, createRowSink, saveLocal, type AnyRow } from '@ledgerone/sqlite-sync';
+import { addDeadLetter, createChangeQueue, createRowSink, saveLocal, type AnyRow } from '@ledgerone/sqlite-sync';
 import { newId, type TransactionRow } from '@ledgerone/domain';
 import { db } from './db';
 import { getAccessToken, makeTransport } from './api';
@@ -37,6 +37,11 @@ export const engine = new SyncEngine({
   queue: createChangeQueue(db),
   sink: createRowSink(db),
   onPushConflict: onPushConflict as never,
+  // 服务端 rejected 的 op:落死信表(B5/N1,与 Web 端对齐),不再重试也不再静默丢弃
+  onDeadLetter: async (op, reason) => {
+    await addDeadLetter(db, op, reason);
+    console.warn('[sync] 变更被服务端拒绝,已移入死信:', op.entityId, reason);
+  },
 });
 
 export function snapshot(): SyncEngineSnapshot {

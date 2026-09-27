@@ -54,8 +54,7 @@ export async function enqueueChange(
   );
 }
 
-/** 变更队列(SyncEngine.ChangeQueue):FIFO take / ack / count */
-export function createChangeQueue(db: SQLiteLike) {
+/** 变更队列(SyncEngine.ChangeQueue):FIFO take / ack / count */export function createChangeQueue(db: SQLiteLike) {
   return {
     async take(limit: number): Promise<ChangeOp[]> {
       const rows = await db.getAllAsync<{
@@ -83,6 +82,45 @@ export function createChangeQueue(db: SQLiteLike) {
       return rows[0]?.n ?? 0;
     },
   };
+}
+
+/** 服务端 rejected 变更的死信隔离(B5/N1):被拒收的 op 已 ack 出队,落 deadletter 供排查/重放,不再阻塞队列 */
+export async function addDeadLetter(
+  db: SQLiteLike,
+  op: Pick<ChangeOp, 'entity' | 'entityId' | 'op' | 'payload'>,
+  reason?: string,
+): Promise<void> {
+  await db.runAsync(
+    'INSERT INTO deadletter (entity, entity_id, op, payload, reason, at) VALUES (?, ?, ?, ?, ?, ?)',
+    [op.entity, op.entityId, op.op, JSON.stringify(op.payload ?? {}), reason ?? '', Date.now()],
+  );
+}
+
+export interface DeadLetterRow {
+  id: number;
+  entity: string;
+  entity_id: string;
+  op: string;
+  payload: string;
+  reason: string;
+  at: number;
+}
+
+/** 读取死信(最近优先;payload 已反解),「我的 → 同步诊断」页可直接展示 */
+export async function listDeadLetters(db: SQLiteLike, limit = 100): Promise<Array<Omit<DeadLetterRow, 'payload'> & { payload: Record<string, unknown> }>> {
+  const rows = await db.getAllAsync<DeadLetterRow>(
+    'SELECT * FROM deadletter ORDER BY id DESC LIMIT ?',
+    [limit],
+  );
+  return rows.map((r) => {
+    let payload: Record<string, unknown> = {};
+    try {
+      payload = JSON.parse(r.payload) as Record<string, unknown>;
+    } catch {
+      /* keep empty */
+    }
+    return { ...r, payload };
+  });
 }
 
 /**

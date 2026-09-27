@@ -143,12 +143,13 @@ export class SyncService {
 
     // ---- 更新 ----
     if (!payload) return { entityId: op.entityId, status: 'noop' };
-    // 幂等重放(网络重试/重复出队):载荷与现有行完全等效 → noop(PRD 5.4)
+    // 幂等重放(网络重试/重复出队):载荷与现有行完全等效 → noop(PRD 5.4)。
+    // 并发安全由「载荷等效 + 字段级合并」共同保证:任何与现有行不一致的载荷一律走合并,
+    // 关键字段(MANUAL_FIELDS)冲突不裁决,绝不静默丢弃客户端修改(B4,有集成测试守护)。
+    // 注:op.baseVersion 目前仅作协议预留/排查线索(客户端编辑基线),服务端裁决不依赖它。
     if (!hasEffectiveChanges(existing, payload)) {
       return { entityId: op.entityId, status: 'noop' };
     }
-    // 并发判定(B4):以客户端编辑基线 baseVersion 对比服务端当前版本;
-    // 基线落后 = 期间有其他端写入 → 必须走字段级合并,绝不静默丢弃。旧客户端无 baseVersion 时也一律合并(宁冲突勿丢)。
     const { merged, conflicts } = mergeServerRow(existing, payload);
     merged.client_version = Math.max(Number(existing.client_version) || 0, op.clientVersion);
     merged.server_version = nextSeq();

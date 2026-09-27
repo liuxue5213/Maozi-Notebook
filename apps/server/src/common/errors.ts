@@ -25,6 +25,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
       return res.status(status).json({ code: `http.${status}`, message: ex.message, retryable: status >= 500 });
     }
     // 上线前全检 #18:未知 500 必须留痕,灰度期不能盲飞
+    // N3:body-parser 的 PayloadTooLargeError 不是 Nest HttpException,按 http-errors 的 status 归类(超限 → 413)
+    const status = typeof (ex as { status?: number }).status === 'number' ? (ex as { status: number }).status : undefined;
+    if (status === 413 || (ex as { type?: string }).type === 'entity.too.large') {
+      return res.status(413).json({ code: 'http.413', message: '请求体过大,请减小单批数量后重试', retryable: false });
+    }
     console.error('[ledgerone] unhandled error:', ex);
     return res.status(500).json({ code: 'http.500', message: '内部错误', retryable: true });
   }

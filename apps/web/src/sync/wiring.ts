@@ -21,7 +21,8 @@ export function enqueue(entity: EntityKind, row: Record<string, unknown>, op: 'u
     entityId: String(row.id),
     op,
     payload: row,
-    // 并发判定基线:编辑时所见的该行服务端版本号(纯本地未同步行为 null)
+    // 客户端编辑基线(协议预留字段):记录编辑时所见的该行服务端版本号(纯本地未同步行为 null)。
+    // 当前服务端裁决不依赖它(并发安全由「载荷等效 + 字段级合并」保证),仅作排查线索保留。
     baseVersion: row.server_version == null ? null : Number(row.server_version),
     clientVersion: Number(row.client_version ?? 1),
     occurredAt: Date.now(),

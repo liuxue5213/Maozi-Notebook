@@ -3,7 +3,7 @@ import type { ChangeOp } from '@ledgerone/domain';
 import { metaGet, metaSet } from '@ledgerone/sqlite-sync';
 import { db } from './db';
 
-const DEFAULT_SERVER = 'http://localhost:3000';
+const DEFAULT_SERVER = 'http://localhost:60505';
 
 export async function getServerUrl(): Promise<string> {
   return ((await metaGet(db, 'server_url')) as string) || DEFAULT_SERVER;

@@ -42,6 +42,16 @@ describe('CSV 解析(M05-F01)', () => {
     expect(r.rows[0].amount).toBe('1234.56');
   });
 
+  it('支付宝「不计收支」行跳过而非误记为支出(D13 防退化)', () => {
+    const csv = `支付宝交易记录明细查询\n----------------------------------------\n交易时间,交易分类,交易对方,商品说明,收/支,金额\n2026-09-22 10:00:00,投资理财,余额宝,余额宝转入,不计收支,5000.00\n2026-09-23 12:00:00,餐饮美食,面馆,午餐,支出,25.00\n`;
+    const mapping = defaultMapping('alipay', splitCsvLine(csv.split('\n')[2]));
+    const r = parseCsv(csv, mapping);
+    expect(r.skipped).toBe(1);
+    expect(r.rows).toHaveLength(1);
+    expect(r.rows[0]).toMatchObject({ amount: '25.00', isExpense: true });
+    expect(JSON.stringify(r.rows)).not.toContain('5000');
+  });
+
   it('无法解析的日期回退为当前时间且不丢行', () => {
     const csv = `时间,金额\n日期不详,10\n`;
     const mapping = defaultMapping('generic', splitCsvLine(csv.split('\n')[0]));

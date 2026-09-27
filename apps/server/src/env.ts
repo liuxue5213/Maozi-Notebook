@@ -24,7 +24,7 @@ failFast();
 export const env = {
   DATABASE_URL: process.env.DATABASE_URL ?? 'pglite://data/ledgerone',
   JWT_SECRET: process.env.JWT_SECRET || DEFAULT_JWT,
-  PORT: Number(process.env.PORT ?? 3000),
+  PORT: Number(process.env.PORT ?? 60505),
   DEV_MODE: process.env.DEV_MODE === 'true',
   IS_PROD: process.env.NODE_ENV === 'production',
 };

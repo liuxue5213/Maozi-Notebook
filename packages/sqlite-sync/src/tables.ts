@@ -53,6 +53,16 @@ CREATE TABLE IF NOT EXISTS outbox (
   occurred_at INTEGER NOT NULL,
   device_id TEXT
 );
+-- 服务端 rejected 的变更死信隔离(上线前全检 B5/N1:与 apps/web Dexie deadletter 表同构)
+CREATE TABLE IF NOT EXISTS deadletter (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  entity TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  op TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  reason TEXT,
+  at INTEGER NOT NULL
+);
 CREATE INDEX IF NOT EXISTS outbox_entity_id_idx ON outbox (entity_id);
 CREATE INDEX IF NOT EXISTS tx_happened_idx ON transactions (ledger_id, happened_at DESC);
 CREATE INDEX IF NOT EXISTS category_ledger_idx ON categories (ledger_id);`;
