@@ -1,0 +1,12 @@
+packages:
+  - packages/*
+  - apps/server
+  - apps/web
+  - apps/mobile
+
+allowBuilds:
+  esbuild: true
+
+# pnpm 11:overrides 写在 workspace 文件;钉住 esbuild 规避 tsx→esbuild@0.28 的平台包解析问题
+overrides:
+  esbuild: 0.25.4

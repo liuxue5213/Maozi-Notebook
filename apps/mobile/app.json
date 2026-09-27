@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "随手账",
+    "slug": "ledgerone",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#f6f7f9",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.ledgerone.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "拍摄票据作为记账附件",
+        "NSMicrophoneUsageDescription": "语音记账的语音输入",
+        "NSFaceIDUsageDescription": "用于应用锁快速解锁"
+      }
+    },
+    "android": {
+      "package": "com.ledgerone.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#4361ee"
+      }
+    }
+  }
+}

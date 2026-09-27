@@ -1,0 +1,117 @@
+import {
+  newId, type ChangeOp, type EntityKind, type PullRow,
+} from '@ledgerone/domain';
+import type { SyncTransport } from '@ledgerone/domain';
+import type { AnyRow, SQLiteLike } from './types';
+import { decodeRow, initSchemaSql, TABLES, upsertSql } from './tables';
+
+export { initSchemaSql, TABLES, decodeRow, normalizeValue, upsertSql } from './tables';
+export type { SQLiteLike, AnyRow } from './types';
+
+export async function initSchema(db: SQLiteLike): Promise<void> {
+  await db.execAsync(initSchemaSql());
+}
+
+export async function metaGet(db: SQLiteLike, key: string): Promise<unknown> {
+  const rows = await db.getAllAsync<{ value: string }>('SELECT value FROM meta WHERE key = ?', [key]);
+  if (!rows.length) return null;
+  try {
+    return JSON.parse(rows[0].value);
+  } catch {
+    return rows[0].value;
+  }
+}
+
+export async function metaSet(db: SQLiteLike, key: string, value: unknown): Promise<void> {
+  await db.runAsync(
+    'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+    [key, JSON.stringify(value ?? null)],
+  );
+}
+
+/** 本地写入 + 入队:App 端所有写操作的第一入口(PRD 5.4 本地为第一写入口) */
+export async function saveLocal(
+  db: SQLiteLike,
+  entity: EntityKind,
+  row: AnyRow,
+  opts: { op?: 'upsert' | 'delete'; deviceId?: string } = {},
+): Promise<void> {
+  const { sql, params } = upsertSql(entity, row);
+  await db.runAsync(sql, params);
+  await enqueueChange(db, entity, row, opts.op ?? 'upsert', opts.deviceId);
+}
+
+export async function enqueueChange(
+  db: SQLiteLike,
+  entity: EntityKind,
+  row: AnyRow,
+  op: 'upsert' | 'delete',
+  deviceId?: string,
+): Promise<void> {
+  await db.runAsync(
+    'INSERT INTO outbox (entity, entity_id, op, payload, client_version, occurred_at, device_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [entity, String(row.id), op, JSON.stringify(row), Number(row.client_version ?? 1), Date.now(), deviceId ?? ''],
+  );
+}
+
+/** 变更队列(SyncEngine.ChangeQueue):FIFO take / ack / count */
+export function createChangeQueue(db: SQLiteLike) {
+  return {
+    async take(limit: number): Promise<ChangeOp[]> {
+      const rows = await db.getAllAsync<{
+        seq: number; entity: string; entity_id: string; op: string; payload: string;
+        client_version: number; occurred_at: number; device_id: string;
+      }>('SELECT * FROM outbox ORDER BY seq LIMIT ?', [limit]);
+      return rows.map((r) => ({
+        seq: r.seq,
+        entity: r.entity as EntityKind,
+        entityId: r.entity_id,
+        op: r.op as 'upsert' | 'delete',
+        payload: JSON.parse(r.payload) as Record<string, unknown>,
+        clientVersion: r.client_version,
+        occurredAt: r.occurred_at,
+        deviceId: r.device_id ?? '',
+      }));
+    },
+    async ack(seqs: number[]): Promise<void> {
+      for (const seq of seqs) {
+        await db.runAsync('DELETE FROM outbox WHERE seq = ?', [seq]);
+      }
+    },
+    async count(): Promise<number> {
+      const rows = await db.getAllAsync<{ n: number }>('SELECT COUNT(*) AS n FROM outbox');
+      return rows[0]?.n ?? 0;
+    },
+  };
+}
+
+/**
+ * 下行落地(SyncEngine.RowSink):
+ * - 本地同实体仍有待推送版本时跳过,待上行 ack 后由下次 pull 收敛;
+ * - 布尔/JSON 规范化 + INSERT OR REPLACE 幂等。
+ */
+export function createRowSink(db: SQLiteLike) {
+  return {
+    async applyServerRow(entity: EntityKind, row: AnyRow): Promise<void> {
+      const pending = await db.getAllAsync<{ seq: number }>('SELECT seq FROM outbox WHERE entity_id = ? LIMIT 1', [String(row.id)]);
+      if (pending.length) return;
+      const { sql, params } = upsertSql(entity, row);
+      await db.runAsync(sql, params);
+    },
+    async getCursor(): Promise<number> {
+      return Number((await metaGet(db, 'sync_cursor')) ?? 0);
+    },
+    async setCursor(cursor: number): Promise<void> {
+      await metaSet(db, 'sync_cursor', cursor);
+    },
+  };
+}
+
+/** 离线读:按账本取最近流水(列表页用) */
+export async function recentTransactions(db: SQLiteLike, ledgerId: string, limit = 50): Promise<AnyRow[]> {
+  const rows = await db.getAllAsync<AnyRow>(
+    'SELECT * FROM transactions WHERE ledger_id = ? AND is_deleted = 0 ORDER BY happened_at DESC LIMIT ?',
+    [ledgerId, limit],
+  );
+  return rows.map((r) => decodeRow('transaction', r));
+}

@@ -1,0 +1,38 @@
+{
+  "name": "@ledgerone/server",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "start": "node dist/main.js",
+    "dev": "pnpm run build && sh -c 'tsc -w -p tsconfig.json & node --watch dist/main.js'",
+    "db:push": "drizzle-kit push",
+    "db:generate": "drizzle-kit generate",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.2.4",
+    "@ledgerone/domain": "workspace:*",
+    "@ledgerone/sync": "workspace:*",
+    "@nestjs/common": "^11.1.0",
+    "@nestjs/core": "^11.1.0",
+    "@nestjs/platform-express": "^11.1.0",
+    "dotenv": "^18.0.4",
+    "drizzle-orm": "^0.44.2",
+    "express": "^5.2.1",
+    "pg": "^8.16.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "uuid": "^11.1.0",
+    "vitest": "^3.2.7",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.0",
+    "drizzle-kit": "^0.31.2",
+    "typescript": "^5.7.3"
+  }
+}

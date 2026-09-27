@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1790480955683,
+      "tag": "0000_short_sabra",
+      "breakpoints": true
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+node_modules/
+dist/
+dist-cjs/
+.turbo/
+.env
+*.local
+*.log
+apps/server/data/
+.DS_Store
+logs/
+output/
+.workbuddy/
+deliverables/

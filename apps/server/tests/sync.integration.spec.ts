@@ -1,0 +1,216 @@
+/**
+ * 服务端同步/鉴权集成测试(上线前全检 B8):
+ * 使用 B7 产出的版本化迁移 SQL 在内存 PGlite 上建库,直测服务层,
+ * 覆盖:引导播种、幂等重放、并发双改(B4)、毒丸批次(B5)、越权 403(B3)、删除幂等、pull 游标推进。
+ */
+import { readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
+import { beforeAll, describe, expect, it } from 'vitest';
+
+process.env.DATABASE_URL = 'pglite://memorydb';
+process.env.NODE_ENV = 'test';
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let db: any;
+let authService: import('../src/auth/auth.service').AuthService;
+let syncService: import('../src/sync/sync.service').SyncService;
+
+beforeAll(async () => {
+  // 1) 版本化迁移即测试基线(验证 B7 迁移 SQL 可从零建库)
+  const drizzleDir = path.resolve(process.cwd(), 'drizzle');
+  const sqlFiles = readdirSync(drizzleDir).filter((f) => f.endsWith('.sql')).sort();
+
+  // 2) env 先于模块加载设定,再动态引入
+  const dbMod = await import('../src/db/db');
+  db = dbMod.db;
+  const { sql } = await import('drizzle-orm');
+  for (const f of sqlFiles) {
+    for (const stmt of readFileSync(path.join(drizzleDir, f), 'utf8').split('--> statement-breakpoint')) {
+      const s = stmt.trim();
+      if (s) await db.execute(sql.raw(s));
+    }
+  }
+  const { AuthService } = await import('../src/auth/auth.service');
+  const { SyncService } = await import('../src/sync/sync.service');
+  authService = new AuthService();
+  syncService = new SyncService();
+}, 60000);
+
+async function register(email: string) {
+  const r = await authService.register({ email, password: 'password123', nickname: 't' });
+  return { userId: r.user.id, token: r.accessToken };
+}
+
+function op(entity: 'transaction', entityId: string, clientVersion: number, payload: Record<string, unknown>, baseVersion?: number | null) {
+  return { entity, entityId, op: 'upsert' as const, payload, clientVersion, baseVersion, occurredAt: Date.now(), deviceId: 'test' };
+}
+
+async function seedTx(userId: string, ledgerId: string, catId: string, accId: string, txId: string, happenedAt = Date.now()) {
+  const res = await syncService.push(userId, [
+    op('transaction', txId, 1, {
+      id: txId, ledger_id: ledgerId, type: 'expense', amount: '26', currency: 'CNY', amount_base: '26',
+      category_id: catId, account_id: accId, happened_at: happenedAt, note: '', client_version: 1,
+    }),
+  ]);
+  expect(res.results[0].status).toBe('applied');
+  return res.results[0];
+}
+
+async function pullIds(userId: string) {
+  const pull = await syncService.pull(userId, 0);
+  const find = (entity: string) => pull.rows.find((r) => r.entity === entity)?.row as Record<string, unknown> | undefined;
+  return {
+    ledgerId: find('ledger')!.id as string,
+    catId: find('category')!.id as string,
+    accId: find('account')!.id as string,
+    cursor: pull.cursor,
+  };
+}
+
+describe('引导播种', () => {
+  it('首次 pull 播种 1 账本 + 78 分类 + 2 账户 + owner 成员', async () => {
+    const { userId } = await register(`t${Date.now()}@test.dev`);
+    const pull = await syncService.pull(userId, 0);
+    const tally: Record<string, number> = {};
+    for (const r of pull.rows) tally[r.entity] = (tally[r.entity] ?? 0) + 1;
+    expect(tally.ledger).toBe(1);
+    expect(tally.category).toBe(78);
+    expect(tally.account).toBe(2);
+    expect(tally.ledger_member).toBe(1);
+  });
+});
+
+describe('B4 并发双改不再丢数据', () => {
+  it('同基线下 A 改金额、B 改备注:A conflict / B applied,金额保留、备注生效,两端意图均不丢', async () => {
+    const { userId } = await register(`conc${Date.now()}@test.dev`);
+    const { ledgerId, catId, accId } = await pullIds(userId);
+    const txId = `tx-${Date.now()}`;
+    const happenedAt = Date.now(); // A/B 与播种共用同一发生时间,避免关键字段幻影冲突
+    const first = await seedTx(userId, ledgerId, catId, accId, txId, happenedAt);
+    const s1 = first.serverVersion!; // A/B 共同基线
+
+    const base = {
+      id: txId, ledger_id: ledgerId, type: 'expense', currency: 'CNY',
+      category_id: catId, account_id: accId, happened_at: happenedAt, client_version: 3,
+    };
+    // 设备 A:改金额(base=s1)
+    const resA = await syncService.push(userId, [
+      op('transaction', txId, 3, { ...base, amount: '30', amount_base: '30', note: '' }, s1),
+    ]);
+    expect(resA.results[0].status).toBe('conflict'); // 金额为关键字段 → 冲突,服务端保留 26
+    expect(resA.results[0].conflicts).toEqual([{ field: 'amount' }]);
+
+    // 设备 B:改备注(base 仍 = s1,因为 B 离线期间不知道 A 已写入)
+    const resB = await syncService.push(userId, [
+      op('transaction', txId, 3, { ...base, amount: '26', amount_base: '26', note: 'B 的备注' }, s1),
+    ]);
+    expect(resB.results[0].status).toBe('applied'); // 旧语义下这里是 noop(数据丢失),现在必须生效
+
+    // 最终行:金额保留服务端值、备注为 B 的修改 —— 两端意图均未丢失
+    const pull2 = await syncService.pull(userId, 0);
+    const row = pull2.rows.find((r) => r.entity === 'transaction' && (r.row as any).id === txId)!.row as Record<string, unknown>;
+    expect(row.note).toBe('B 的备注');
+    expect(Number(row.amount)).toBe(26);
+  });
+
+  it('幂等重放:同载荷重复上行 → noop', async () => {
+    const { userId } = await register(`replay${Date.now()}@test.dev`);
+    const { ledgerId, catId, accId } = await pullIds(userId);
+    const txId = `replay-${Date.now()}`;
+    const payload = {
+      id: txId, ledger_id: ledgerId, type: 'expense', amount: '9.9', amount_base: '9.9',
+      category_id: catId, account_id: accId, happened_at: Date.now(), note: 'x', client_version: 1,
+    };
+    expect((await syncService.push(userId, [op('transaction', txId, 1, payload)])).results[0].status).toBe('applied');
+    expect((await syncService.push(userId, [op('transaction', txId, 2, { ...payload, client_version: 2 })])).results[0].status).toBe('noop');
+  });
+});
+
+describe('B5 毒丸批次不再阻塞', () => {
+  it('坏 op 返回 rejected,同批好 op 正常 applied', async () => {
+    const { userId } = await register(`pill${Date.now()}@test.dev`);
+    const { ledgerId, catId, accId } = await pullIds(userId);
+    const res = await syncService.push(userId, [
+      op('transaction', 'bad-1', 1, { id: 'bad-1', ledger_id: ledgerId }), // 缺必填字段 → rejected
+      op('transaction', `good-${Date.now()}`, 1, {
+        id: `good-${Date.now()}`, ledger_id: ledgerId, type: 'expense', amount: '5', amount_base: '5',
+        category_id: catId, account_id: accId, happened_at: Date.now(), note: '', client_version: 1,
+      }),
+    ]);
+    expect(res.results[0].status).toBe('rejected');
+    expect(res.results[0].reason).toBeTruthy();
+    expect(res.results[1].status).toBe('applied');
+  });
+
+  it('删除不存在的行 → 幂等 noop(#28)', async () => {
+    const { userId } = await register(`del${Date.now()}@test.dev`);
+    const { ledgerId } = await pullIds(userId);
+    const res = await syncService.push(userId, [
+      { entity: 'transaction', entityId: 'never-existed', op: 'delete', payload: { id: 'never-existed', ledger_id: ledgerId }, clientVersion: 1, occurredAt: Date.now(), deviceId: 't' },
+    ]);
+    expect(res.results[0].status).toBe('noop');
+  });
+});
+
+describe('B3 越权防护', () => {
+  it('把他行「搬家」到自己的账本 → 403,且不回显服务端原值', async () => {
+    const u1 = await register(`victim${Date.now()}@test.dev`);
+    const u2 = await register(`attacker${Date.now()}@test.dev`);
+    const ids1 = await pullIds(u1.userId);
+    const ids2 = await pullIds(u2.userId);
+    const txId = `victim-tx-${Date.now()}`;
+    await seedTx(u1.userId, ids1.ledgerId, ids1.catId, ids1.accId, txId);
+
+    // 攻击者:自己的 ledger_id + 受害者流水 UUID,尝试改金额
+    const resA = await syncService.push(u2.userId, [
+      op('transaction', txId, 2, {
+        id: txId, ledger_id: ids2.ledgerId, type: 'expense', amount: '0.01', amount_base: '0.01',
+        category_id: ids2.catId, account_id: ids2.accId, happened_at: Date.now(), note: '', client_version: 2,
+      }),
+    ]);
+    // 搬家攻击:拒收且不回显服务端原值(reason 只有字段名与错误码)
+    expect(resA.results[0].status).toBe('rejected');
+    expect(resA.results[0].reason).toContain('403');
+    expect(JSON.stringify(resA.results[0])).not.toContain('amount":');
+
+    // 冲突响应不回显服务端原值(对合法用户)
+    const res = await syncService.push(u1.userId, [
+      op('transaction', txId, 3, {
+        id: txId, ledger_id: ids1.ledgerId, type: 'expense', amount: '99', amount_base: '99',
+        category_id: ids1.catId, account_id: ids1.accId, happened_at: Date.now(), note: '', client_version: 3,
+      }, ids1.cursor),
+    ]);
+    expect(res.results[0].status).toBe('conflict');
+    expect(JSON.stringify(res.results[0].conflicts)).not.toContain('serverValue');
+  });
+
+  it('被移除成员(软删)失去读写权', async () => {
+    const owner = await register(`owner${Date.now()}@test.dev`);
+    const ids = await pullIds(owner.userId);
+    // 直接软删 owner 自己的成员关系模拟「被移除」
+    await db.execute(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (await import('drizzle-orm')).sql`update ledger_members set is_deleted = true`,
+    );
+    await expect(syncService.pull(owner.userId, 0)).resolves.toBeTruthy(); // pull 不抛
+    const res = await syncService.push(owner.userId, [
+      op('transaction', `orphan-${Date.now()}`, 1, {
+        id: `orphan-${Date.now()}`, ledger_id: ids.ledgerId, type: 'expense', amount: '1', amount_base: '1',
+        category_id: ids.catId, account_id: ids.accId, happened_at: Date.now(), note: '', client_version: 1,
+      }),
+    ]);
+    expect(res.results[0].status).toBe('rejected');
+    expect(res.results[0].reason).toContain('403');
+  });
+});
+
+describe('pull 游标推进', () => {
+  it('首拉后用返回游标再拉 → 空增量', async () => {
+    const { userId } = await register(`cursor${Date.now()}@test.dev`);
+    const p1 = await syncService.pull(userId, 0);
+    expect(p1.rows.length).toBeGreaterThan(0);
+    const p2 = await syncService.pull(userId, p1.cursor);
+    expect(p2.rows).toHaveLength(0);
+    expect(p2.hasMore).toBe(false);
+  });
+});
