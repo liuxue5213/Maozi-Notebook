@@ -25,6 +25,14 @@ export function AuthModal({ onClose, onAuthed }: { onClose: () => void; onAuthed
     setError(null);
     try {
       if (server !== null) setServerBase(server);
+      // 换号前冲刷旧账号 outbox(全检 #19/#34):避免离线编辑随 wipeLocal 丢失
+      if (isLoggedIn() && getUserId()) {
+        try {
+          await engine.syncOnce();
+        } catch {
+          // 旧账号 flush 失败不阻断登录(离线编辑仍在本机,可手动导出)
+        }
+      }
       const data =
         mode === 'login'
           ? await authApi.login(email, password)

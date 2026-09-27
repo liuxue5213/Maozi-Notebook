@@ -300,7 +300,7 @@ CREATE INDEX "budget_ledger_idx" ON "budgets" USING btree ("ledger_id");--> stat
 CREATE INDEX "category_ledger_idx" ON "categories" USING btree ("ledger_id");--> statement-breakpoint
 CREATE INDEX "debt_ledger_idx" ON "debts" USING btree ("ledger_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "member_ledger_user_uq" ON "ledger_members" USING btree ("ledger_id","user_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "pending_dedupe_uq" ON "pending_transactions" USING btree ("dedupe_hash");--> statement-breakpoint
+CREATE UNIQUE INDEX "pending_dedupe_uq" ON "pending_transactions" USING btree ("ledger_id","dedupe_hash");--> statement-breakpoint
 CREATE INDEX "pending_ledger_idx" ON "pending_transactions" USING btree ("ledger_id");--> statement-breakpoint
 CREATE INDEX "recurring_ledger_idx" ON "recurring_rules" USING btree ("ledger_id");--> statement-breakpoint
 CREATE INDEX "refresh_user_idx" ON "refresh_tokens" USING btree ("user_id");--> statement-breakpoint

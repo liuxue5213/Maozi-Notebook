@@ -5,7 +5,9 @@ export async function dedupeHash(input: {
   accountId: string;
   merchant?: string;
 }): Promise<string> {
-  const material = `${input.amount}|${Math.floor(input.happenedAt / 60000)}|${input.accountId}|${input.merchant ?? ''}`;
+  // 金额定点归一化(上线全检 #27):'26.0' 与 '26.00' 视为同一金额
+  const amount = String(parseFloat(Number(input.amount).toFixed(2)));
+  const material = `${amount}|${Math.floor(input.happenedAt / 60000)}|${input.accountId}|${input.merchant ?? ''}`;
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(material));
   return Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, '0'))

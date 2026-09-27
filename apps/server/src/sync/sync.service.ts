@@ -8,7 +8,7 @@ import {
 import { db } from '../db/db';
 import * as s from '../db/schema';
 import { AppError } from '../common/errors';
-import { bootstrapIfNeeded, getUserSeq, reserveSeq } from '../db/bootstrap';
+import { bootstrapIfNeeded, reserveSeq } from '../db/bootstrap';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -163,55 +163,65 @@ export class SyncService {
       : { entityId: op.entityId, status: 'applied', serverVersion: Number(merged.server_version) };
   }
 
-  /** 下行:server_version > cursor 的增量,按账本成员范围过滤 */
+  /**
+   * 下行:server_version > cursor 的增量,按账本成员范围过滤(上线全检 #11/D14)。
+   * - 整体置于可重复读事务:13 张表的读取基于同一快照,避免跨表撕裂;
+   * - 空页时保持游标不变(不跳到 head):并发提交晚于本页读取的行,客户端下次 pull
+   *   会在同一区间重新扫描,绝不漏发。
+   */
   async pull(userId: string, cursor: number, limit = 500): Promise<PullResponse> {
     await bootstrapIfNeeded(userId);
-    const myLedgerIds = (
-      await db
-        .select({ ledger_id: s.ledger_members.ledger_id, is_deleted: s.ledger_members.is_deleted })
-        .from(s.ledger_members)
-        .where(and(eq(s.ledger_members.user_id, userId), eq(s.ledger_members.is_deleted, false)))
-    )
-      .filter((r) => !r.is_deleted)
-      .map((r) => r.ledger_id);
+    return db.transaction(
+      async (tx: any) => {
+        const myLedgerIds = (
+          await tx
+            .select({ ledger_id: s.ledger_members.ledger_id, is_deleted: s.ledger_members.is_deleted })
+            .from(s.ledger_members)
+            .where(and(eq(s.ledger_members.user_id, userId), eq(s.ledger_members.is_deleted, false)))
+        )
+          .filter((r: any) => !r.is_deleted)
+          .map((r: any) => r.ledger_id);
 
-    const rows: PullRow[] = [];
-    const push = (kind: EntityKind, arr: any[]) => rows.push(...arr.map((row) => ({ entity: kind, row })));
+        const rows: PullRow[] = [];
+        const push = (kind: EntityKind, arr: any[]) => rows.push(...arr.map((row) => ({ entity: kind, row })));
 
-    if (myLedgerIds.length) {
-      for (const cfg of PULL_CONFIG) {
-        const t = cfg.table;
-        const conds = [gt(t.server_version, cursor)];
-        if (cfg.kind === 'ledger') conds.push(inArray(t.id, myLedgerIds));
-        else if (cfg.kind === 'ledger_member') conds.push(eq(t.user_id, userId));
-        else conds.push(inArray(t.ledger_id, myLedgerIds));
-        const part = await db.select().from(t).where(and(...conds)).orderBy(t.server_version).limit(limit + 1);
-        push(cfg.kind, part);
-      }
-      const att = await db
-        .select({ row: s.attachments })
-        .from(s.attachments)
-        .innerJoin(s.transactions, eq(s.attachments.transaction_id, s.transactions.id))
-        .where(and(gt(s.attachments.server_version, cursor), inArray(s.transactions.ledger_id, myLedgerIds)))
-        .orderBy(s.attachments.server_version)
-        .limit(limit + 1);
-      push('attachment', att.map((r: any) => r.row));
-      const items = await db
-        .select({ row: s.budget_items })
-        .from(s.budget_items)
-        .innerJoin(s.budgets, eq(s.budget_items.budget_id, s.budgets.id))
-        .where(and(gt(s.budget_items.server_version, cursor), inArray(s.budgets.ledger_id, myLedgerIds)))
-        .orderBy(s.budget_items.server_version)
-        .limit(limit + 1);
-      push('budget_item', items.map((r: any) => r.row));
-    }
+        if (myLedgerIds.length) {
+          for (const cfg of PULL_CONFIG) {
+            const t = cfg.table;
+            const conds = [gt(t.server_version, cursor)];
+            if (cfg.kind === 'ledger') conds.push(inArray(t.id, myLedgerIds));
+            else if (cfg.kind === 'ledger_member') conds.push(eq(t.user_id, userId));
+            else conds.push(inArray(t.ledger_id, myLedgerIds));
+            const part = await tx.select().from(t).where(and(...conds)).orderBy(t.server_version).limit(limit + 1);
+            push(cfg.kind, part);
+          }
+          const att = await tx
+            .select({ row: s.attachments })
+            .from(s.attachments)
+            .innerJoin(s.transactions, eq(s.attachments.transaction_id, s.transactions.id))
+            .where(and(gt(s.attachments.server_version, cursor), inArray(s.transactions.ledger_id, myLedgerIds)))
+            .orderBy(s.attachments.server_version)
+            .limit(limit + 1);
+          push('attachment', att.map((r: any) => r.row));
+          const items = await tx
+            .select({ row: s.budget_items })
+            .from(s.budget_items)
+            .innerJoin(s.budgets, eq(s.budget_items.budget_id, s.budgets.id))
+            .where(and(gt(s.budget_items.server_version, cursor), inArray(s.budgets.ledger_id, myLedgerIds)))
+            .orderBy(s.budget_items.server_version)
+            .limit(limit + 1);
+          push('budget_item', items.map((r: any) => r.row));
+        }
 
-    rows.sort((a, b) => (Number(a.row.server_version) || 0) - (Number(b.row.server_version) || 0));
-    const hasMore = rows.length > limit;
-    const page = rows.slice(0, limit);
-    const head = await getUserSeq(userId);
-    const newCursor = page.length ? Number(page[page.length - 1].row.server_version ?? head) : Math.max(head, cursor);
-    return { cursor: newCursor, hasMore, rows: page };
+        rows.sort((a, b) => (Number(a.row.server_version) || 0) - (Number(b.row.server_version) || 0));
+        const hasMore = rows.length > limit;
+        const page = rows.slice(0, limit);
+        // 空页保持游标不动:head 与旧游标之间仍可能有并发提交的行,跳头会永久漏发
+        const newCursor = page.length ? Number(page[page.length - 1].row.server_version ?? cursor) : cursor;
+        return { cursor: newCursor, hasMore, rows: page };
+      },
+      { isolationLevel: 'repeatable read' } as any,
+    );
   }
 
   private async membership(tx: any, userId: string, ledgerId: string): Promise<{ role: string } | undefined> {

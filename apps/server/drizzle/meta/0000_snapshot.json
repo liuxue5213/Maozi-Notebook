@@ -1,5 +1,5 @@
 {
-  "id": "75ca418c-e3c2-46ba-abd0-cbb71f7a0a41",
+  "id": "8f004d81-f989-4187-b131-b36217c69a6a",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -1113,6 +1113,12 @@
         "pending_dedupe_uq": {
           "name": "pending_dedupe_uq",
           "columns": [
+            {
+              "expression": "ledger_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
             {
               "expression": "dedupe_hash",
               "isExpression": false,

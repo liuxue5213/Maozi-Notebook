@@ -3,10 +3,12 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ledgerone
+      # F-16:生产请通过环境变量覆盖弱口令
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ledgerone}
       POSTGRES_DB: ledgerone
     ports:
-      - "5432:5432"
+      # F-16:仅绑定本机回环,不暴露 0.0.0.0
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
 volumes:

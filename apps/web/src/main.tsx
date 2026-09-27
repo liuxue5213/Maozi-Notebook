@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { App } from './App';
 import { LockGate } from './security';
+import { ErrorBoundary } from './ErrorBoundary';
 import { ensureLocalSeed } from './db/seed';
 import { seedDemoData } from './db/demo';
 import { engine, enqueue } from './sync/wiring';
@@ -19,7 +20,9 @@ void ensureLocalSeed()
     ReactDOM.createRoot(document.getElementById('root')!).render(
       <React.StrictMode>
         <LockGate>
-          <App />
+          <ErrorBoundary>
+            <App />
+          </ErrorBoundary>
         </LockGate>
       </React.StrictMode>,
     );

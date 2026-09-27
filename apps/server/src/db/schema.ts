@@ -226,7 +226,7 @@ export const pending_transactions = pgTable(
     ...syncCols,
   },
   (t) => [
-    uniqueIndex('pending_dedupe_uq').on(t.dedupe_hash),
+    uniqueIndex('pending_dedupe_uq').on(t.ledger_id, t.dedupe_hash),
     index('pending_ledger_idx').on(t.ledger_id),
   ],
 );
