@@ -163,7 +163,9 @@ CREATE TABLE "pending_transactions" (
 --> statement-breakpoint
 CREATE TABLE "phone_codes" (
 	"phone" text PRIMARY KEY NOT NULL,
-	"code" text NOT NULL,
+	"code_hash" text NOT NULL,
+	"attempts" integer DEFAULT 0 NOT NULL,
+	"last_sent_at" bigint DEFAULT 0 NOT NULL,
 	"expires_at" bigint NOT NULL,
 	"used" boolean DEFAULT false NOT NULL,
 	"created_at" bigint NOT NULL

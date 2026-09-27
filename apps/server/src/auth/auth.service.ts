@@ -1,5 +1,6 @@
 import { and, eq, gt, isNull } from 'drizzle-orm';
 import { Injectable } from '@nestjs/common';
+import { randomBytes, randomInt, createHmac, timingSafeEqual } from 'node:crypto';
 import { newId } from '@ledgerone/domain';
 import { db } from '../db/db';
 import * as s from '../db/schema';
@@ -8,7 +9,10 @@ import { hashPassword, randomToken, sha256Hex, signJwt, verifyPassword } from '.
 import { AppError } from '../common/errors';
 
 const ACCESS_TTL_S = 2 * 60 * 60;
-const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const REFRESH_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 上线全检 F-08:30 天 → 14 天
+const CODE_TTL_MS = 10 * 60_000;
+const CODE_RESEND_COOLDOWN_MS = 60_000; // F-07:60s 冷却
+const CODE_MAX_ATTEMPTS = 5; // F-06:失败 5 次锁定(重发重置)
 
 export interface TokenPair {
   accessToken: string;
@@ -27,7 +31,7 @@ export class AuthService {
     await db.insert(s.users).values({
       id,
       email,
-      password_hash: hashPassword(input.password),
+      password_hash: await hashPassword(input.password),
       nickname: input.nickname?.trim() || email.split('@')[0],
       version_seq: 0,
       created_at: now,
@@ -36,14 +40,31 @@ export class AuthService {
     return this.issue(id);
   }
 
+  /** 验证码摘要:与手机号绑定(防跨号撞库),库中只存 HMAC 摘要不存明文(F-06) */
+  private codeDigest(phone: string, code: string): string {
+    return createHmac('sha256', env.JWT_SECRET).update(`${phone}:${code}`).digest('hex');
+  }
+
+  /**
+   * 发送验证码(F-06/F-07):CSPRNG(randomInt)生成,库中只存 HMAC 摘要;
+   * 60s 冷却内拒绝重发(重发会重置失败计数);
+   * 生产接入真实短信通道(I01),开发态 DEV_MODE 直接返回便于联调。
+   */
   async sendCode(phone: string): Promise<{ devCode?: string }> {
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const last = (await db.select().from(s.phone_codes).where(eq(s.phone_codes.phone, phone)).limit(1))[0];
+    if (last && Date.now() - Number(last.last_sent_at) < CODE_RESEND_COOLDOWN_MS) {
+      throw new AppError('auth.code.429', 429, '发送过于频繁,请 60 秒后再试');
+    }
+    const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    const codeHash = this.codeDigest(phone, code);
     const now = Date.now();
     await db
       .insert(s.phone_codes)
-      .values({ phone, code, expires_at: now + 10 * 60_000, used: false, created_at: now })
-      .onConflictDoUpdate({ target: s.phone_codes.phone, set: { code, expires_at: now + 10 * 60_000, used: false } });
-    // 生产环境接入短信通道(I01);仅开发态 DEV_MODE 直接返回(上线前全检 B2,生产由 env fail-fast 拒绝启动)
+      .values({ phone, code_hash: codeHash, attempts: 0, last_sent_at: now, expires_at: now + CODE_TTL_MS, used: false, created_at: now })
+      .onConflictDoUpdate({
+        target: s.phone_codes.phone,
+        set: { code_hash: codeHash, attempts: 0, last_sent_at: now, expires_at: now + CODE_TTL_MS, used: false },
+      });
     return env.DEV_MODE && !env.IS_PROD ? { devCode: code } : {};
   }
 
@@ -52,20 +73,26 @@ export class AuthService {
       const u = (
         await db.select().from(s.users).where(eq(s.users.email, input.email.trim().toLowerCase())).limit(1)
       )[0];
-      if (!u?.password_hash || !verifyPassword(input.password, u.password_hash)) {
+      if (!u?.password_hash || !(await verifyPassword(input.password, u.password_hash))) {
         throw new AppError('auth.login.401', 401, '邮箱或密码错误');
       }
       return this.issue(u.id);
     }
     if (input.phone && input.code) {
-      const c = (
-        await db
-          .select()
-          .from(s.phone_codes)
-          .where(and(eq(s.phone_codes.phone, input.phone), eq(s.phone_codes.code, input.code), eq(s.phone_codes.used, false), gt(s.phone_codes.expires_at, Date.now())))
-          .limit(1)
+      const rec = (
+        await db.select().from(s.phone_codes).where(eq(s.phone_codes.phone, input.phone)).limit(1)
       )[0];
-      if (!c) throw new AppError('auth.code.401', 401, '验证码错误或已过期');
+      if (!rec) throw new AppError('auth.code.401', 401, '验证码错误或已过期');
+      if (rec.attempts >= CODE_MAX_ATTEMPTS) {
+        throw new AppError('auth.code.429', 429, '失败次数过多,请重新获取验证码');
+      }
+      const expect = Buffer.from(this.codeDigest(input.phone, input.code), 'hex');
+      const got = Buffer.from(rec.code_hash, 'hex');
+      const ok = expect.length === got.length && timingSafeEqual(expect, got);
+      if (!ok || rec.used || Date.now() > Number(rec.expires_at)) {
+        await db.update(s.phone_codes).set({ attempts: rec.attempts + 1 }).where(eq(s.phone_codes.phone, input.phone));
+        throw new AppError('auth.code.401', 401, '验证码错误或已过期');
+      }
       await db.update(s.phone_codes).set({ used: true }).where(eq(s.phone_codes.phone, input.phone));
       let u = (await db.select().from(s.users).where(eq(s.users.phone, input.phone)).limit(1))[0];
       if (!u) {
@@ -91,6 +118,14 @@ export class AuthService {
     if (!row) throw new AppError('auth.refresh.401', 401, '刷新令牌无效或已过期');
     await db.update(s.refresh_tokens).set({ revoked_at: Date.now() }).where(eq(s.refresh_tokens.id, row.id));
     return this.issue(row.user_id);
+  }
+
+  /** 全端下线(F-08):吊销该用户全部 refresh token(丢设备/改密码后亦可复用) */
+  async revokeAllSessions(userId: string): Promise<void> {
+    await db
+      .update(s.refresh_tokens)
+      .set({ revoked_at: Date.now() })
+      .where(and(eq(s.refresh_tokens.user_id, userId), isNull(s.refresh_tokens.revoked_at)));
   }
 
   async me(userId: string) {

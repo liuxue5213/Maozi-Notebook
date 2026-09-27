@@ -1,16 +1,23 @@
-import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
 import { env } from '../env';
 
-export function hashPassword(pw: string): string {
+/** 异步 scrypt:避免阻塞事件循环(上线全检 审查#10) */
+function scrypt(pw: string, salt: string, len: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    scryptCb(pw, salt, len, (err, key) => (err ? reject(err) : resolve(key)));
+  });
+}
+
+export async function hashPassword(pw: string): Promise<string> {
   const salt = randomBytes(16).toString('hex');
-  const h = scryptSync(pw, salt, 64).toString('hex');
+  const h = (await scrypt(pw, salt, 64)).toString('hex');
   return `scrypt$${salt}$${h}`;
 }
 
-export function verifyPassword(pw: string, stored: string): boolean {
+export async function verifyPassword(pw: string, stored: string): Promise<boolean> {
   const [alg, salt, h] = stored.split('$');
   if (alg !== 'scrypt' || !salt || !h) return false;
-  const calc = scryptSync(pw, salt, 64);
+  const calc = await scrypt(pw, salt, 64);
   const expect = Buffer.from(h, 'hex');
   return calc.length === expect.length && timingSafeEqual(calc, expect);
 }

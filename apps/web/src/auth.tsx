@@ -109,7 +109,12 @@ export function MeTab({ onOpenAuth, onAuthChanged }: { onOpenAuth: () => void; o
       .catch(() => setEmail(null));
   }, []);
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      await authApi.logout(); // 服务端吊销全部 refresh token(全端下线,F-08)
+    } catch {
+      // 服务端不可达也照常清理本地
+    }
     clearTokens();
     onAuthChanged();
   };

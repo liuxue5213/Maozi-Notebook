@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { json, urlencoded } from 'express';
 import { AppModule } from './app.module';
 import { env } from './env';
+import { purgeRecycleBin } from './purge';
 
 async function main(): Promise<void> {
   const app = await NestFactory.create(AppModule);

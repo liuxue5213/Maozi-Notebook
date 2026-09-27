@@ -89,6 +89,7 @@ async function apiFetch(path: string, init: RequestInit = {}, retry = true): Pro
 export const authApi = {
   register: (email: string, password: string, nickname: string) =>
     apiFetch('/v1/auth/register', { method: 'POST', body: JSON.stringify({ email, password, nickname }) }),
+  logout: () => apiFetch('/v1/auth/logout', { method: 'POST', body: '{}' }),
   login: (email: string, password: string) =>
     apiFetch('/v1/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   me: () => apiFetch('/v1/users/me') as Promise<SessionUser>,

@@ -1,5 +1,8 @@
 import { Controller, Get, Module } from '@nestjs/common';
-import { APP_FILTER } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { sql } from 'drizzle-orm';
+import { db } from './db/db';
 import { AuthModule } from './auth/auth.module';
 import { LedgerModule } from './ledgers/ledger.module';
 import { SyncModule } from './sync/sync.module';
@@ -11,11 +14,29 @@ export class HealthController {
   health() {
     return { ok: true, ts: Date.now() };
   }
+
+  /** 就绪探针:真实探活 DB(上线全检 #18,灰度摘除依据) */
+  @Get('readyz')
+  async ready() {
+    try {
+      await db.execute(sql`select 1`);
+      return { ok: true, db: true };
+    } catch {
+      return { ok: false, db: false };
+    }
+  }
 }
 
 @Module({
-  imports: [AuthModule, SyncModule, LedgerModule],
+  // F-07:全局兜底 100 次/分钟/IP;敏感路由在各自 Controller 上有更严格的 @Throttle
+  imports: [
+    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
+    AuthModule, SyncModule, LedgerModule,
+  ],
   controllers: [HealthController],
-  providers: [{ provide: APP_FILTER, useClass: AllExceptionsFilter }],
+  providers: [
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_FILTER, useClass: AllExceptionsFilter },
+  ],
 })
 export class AppModule {}

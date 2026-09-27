@@ -4,11 +4,13 @@
  * 覆盖:引导播种、幂等重放、并发双改(B4)、毒丸批次(B5)、越权 403(B3)、删除幂等、pull 游标推进。
  */
 import { readFileSync, readdirSync } from 'node:fs';
+import { sql } from 'drizzle-orm';
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 process.env.DATABASE_URL = 'pglite://memorydb';
 process.env.NODE_ENV = 'test';
+process.env.DEV_MODE = 'true'; // 测试需要回显 devCode(服务端生产环境由 fail-fast 禁止)
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let db: any;
@@ -212,5 +214,51 @@ describe('pull 游标推进', () => {
     const p2 = await syncService.pull(userId, p1.cursor);
     expect(p2.rows).toHaveLength(0);
     expect(p2.hasMore).toBe(false);
+  });
+});
+
+describe('F-06/F-07 验证码安全', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let eq: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let schema: any;
+
+  beforeAll(async () => {
+    eq = (await import('drizzle-orm')).eq;
+    schema = await import('../src/db/schema');
+  });
+
+  const uniquePhone = () => `139${String(Date.now()).slice(-10)}`;
+
+  it('验证码只存 HMAC 摘要(64 位 hex),不存明文;记录带冷却时间戳', async () => {
+    const phone = uniquePhone();
+    await authService.sendCode(phone);
+    const rec = (await db.select().from(schema.phone_codes).where(eq(schema.phone_codes.phone, phone)).limit(1))[0];
+    expect(rec.code_hash).toHaveLength(64);
+    expect(rec.last_sent_at).toBeGreaterThan(0);
+    expect(rec.attempts).toBe(0);
+  });
+
+  it('60s 冷却内重发 → 429', async () => {
+    const phone = uniquePhone();
+    await authService.sendCode(phone);
+    await expect(authService.sendCode(phone)).rejects.toMatchObject({ status: 429 });
+  });
+
+  it('验证码错 5 次 → 锁定 429;重发重置后正确码登录成功', async () => {
+    const phone = uniquePhone();
+    const { devCode } = await authService.sendCode(phone);
+    expect(devCode).toBeTruthy();
+    for (let i = 0; i < 5; i++) {
+      await expect(authService.login({ phone, code: '000000' })).rejects.toMatchObject({ status: 401 });
+    }
+    // 拿到正确码也因锁定被拒
+    await expect(authService.login({ phone, code: devCode! })).rejects.toMatchObject({ status: 429 });
+    // 重发(测试中直接把 last_sent_at 拨回 60s 前以跳过冷却)
+    await db.execute(sql.raw(`update phone_codes set last_sent_at = ${Date.now() - 61_000} where phone = '${phone}'`));
+    const resend = await authService.sendCode(phone);
+    expect(resend.devCode).toBeTruthy();
+    const tokens = await authService.login({ phone, code: resend.devCode! });
+    expect(tokens.user.phone).toBe(phone);
   });
 });

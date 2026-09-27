@@ -5,14 +5,45 @@ const LOCK_KEY = 'lo_lock';
 const STAT_KEY = 'lo_stat_optin';
 const CRASH_KEY = 'lo_crash_optin';
 
+/** PBKDF2 参数(上线全检 F-04:替换单轮无盐 SHA-256) */
+const PBKDF2_ITERATIONS = 150_000;
+const LOCK_MAX_ATTEMPTS = 5;
+const LOCK_BACKOFF_MS = 60_000;
+
 interface LockConfig {
+  /** 格式版本:v2 = PBKDF2-SHA256 + 随机盐;缺省 = 旧版单轮 SHA-256(成功验证后自动升级) */
+  v?: 2;
+  salt?: string;
   hash: string;
   enabled: boolean;
+  /** 连续失败次数(达到 5 次触发退避) */
+  fails?: number;
+  /** 退避截止时间戳 */
+  lockUntil?: number;
+}
+
+function bytesToHex(buf: ArrayBuffer | Uint8Array): string {
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 async function sha256Hex(s: string): Promise<string> {
-  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`ledgerone:${s}`));
-  return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+  return bytesToHex(d);
+}
+
+async function derivePinHash(pin: string, saltHex: string): Promise<string> {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
+  const salt = new Uint8Array(saltHex.match(/.{2}/g)!.map((b) => parseInt(b, 16)));
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations: PBKDF2_ITERATIONS },
+    key,
+    256,
+  );
+  return bytesToHex(bits);
+}
+
+function newSalt(): string {
+  return bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
 }
 
 export function getLockConfig(): LockConfig | null {
@@ -24,8 +55,25 @@ export function getLockConfig(): LockConfig | null {
   }
 }
 
+function saveLockConfig(cfg: LockConfig): void {
+  localStorage.setItem(LOCK_KEY, JSON.stringify(cfg));
+}
+
 function isLockEnabled(): boolean {
   return getLockConfig()?.enabled === true;
+}
+
+/** 锁定状态判定:失败 5 次后退避 60 秒 */
+function backoffRemaining(cfg: LockConfig | null): number {
+  if (!cfg || !cfg.lockUntil) return 0;
+  return Math.max(0, cfg.lockUntil - Date.now());
+}
+
+async function verifyPin(pin: string, cfg: LockConfig): Promise<boolean> {
+  if (cfg.v === 2 && cfg.salt) return (await derivePinHash(pin, cfg.salt)) === cfg.hash;
+  // 旧版(单轮 SHA-256 无盐):验证成功后自动升级到 v2
+  if ((await sha256Hex(pin)) === cfg.hash) return true;
+  return false;
 }
 
 /** 应用锁门卫(M16-F01,Web 形态):冷启动与切后台返回时要求输入 PIN;生物识别为 App 端能力 */
@@ -47,15 +95,36 @@ export function LockGate({ children }: { children: ReactNode }) {
 function LockOverlay({ onUnlock }: { onUnlock: () => void }) {
   const [pin, setPin] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [cfg, setCfg] = useState<LockConfig | null>(() => getLockConfig());
+
+  const lockedOut = backoffRemaining(cfg) > 0;
 
   const submit = async () => {
-    const cfg = getLockConfig();
-    if (!cfg) return onUnlock();
-    if ((await sha256Hex(pin)) === cfg.hash) {
+    const config = getLockConfig();
+    if (!config) return onUnlock();
+    const wait = backoffRemaining(config);
+    if (wait > 0) {
+      setError(`失败次数过多,请 ${Math.ceil(wait / 1000)} 秒后再试`);
+      setPin('');
+      return;
+    }
+    if (await verifyPin(pin, config)) {
+      // 旧格式(无盐单轮哈希)成功验证 → 自动升级 v2(PBKDF2 + 随机盐)
+      if (config.v !== 2 || !config.salt) {
+        const salt = newSalt();
+        const upgraded: LockConfig = { v: 2, salt, hash: await derivePinHash(pin, salt), enabled: true, fails: 0, lockUntil: undefined };
+        saveLockConfig(upgraded);
+      }
+      const reset: LockConfig = { ...getLockConfig()!, fails: 0, lockUntil: undefined };
+      saveLockConfig(reset);
       setPin('');
       onUnlock();
     } else {
-      setError('PIN 不正确');
+      const fails = (config.fails ?? 0) + 1;
+      const next: LockConfig = { ...config, fails, lockUntil: fails >= LOCK_MAX_ATTEMPTS ? Date.now() + LOCK_BACKOFF_MS : undefined };
+      saveLockConfig(next);
+      setCfg(next);
+      setError(next.lockUntil ? '失败次数过多,锁定 60 秒' : 'PIN 不正确');
       setPin('');
     }
   };
@@ -89,14 +158,14 @@ function LockOverlay({ onUnlock }: { onUnlock: () => void }) {
           }}
         />
         {error && <div className="form-error">{error}</div>}
-        <button className="primary" disabled={pin.length < 4} onClick={() => void submit()}>解锁</button>
+        <button className="primary" disabled={pin.length < 4 || lockedOut} onClick={() => void submit()}>解锁</button>
         <button className="link small" onClick={() => void forgot()}>忘记 PIN?</button>
       </div>
     </div>
   );
 }
 
-function PinSetupModal({ onDone, onClose }: { onDone: (hash: string) => void; onClose: () => void }) {
+function PinSetupModal({ onDone, onClose }: { onDone: (hash: string, salt: string) => void; onClose: () => void }) {
   const [pin, setPin] = useState('');
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -105,7 +174,8 @@ function PinSetupModal({ onDone, onClose }: { onDone: (hash: string) => void; on
   const submit = async () => {
     if (!/^\d{4,6}$/.test(pin)) return setError('PIN 需为 4–6 位数字');
     if (pin !== confirm) return setError('两次输入不一致');
-    onDone(await sha256Hex(pin));
+    const salt = newSalt();
+    onDone(await derivePinHash(pin, salt), salt);
   };
 
   return (
@@ -143,7 +213,7 @@ function PinVerifyModal({ onVerified, onClose }: { onVerified: () => void; onClo
           disabled={pin.length < 4}
           onClick={async () => {
             const cfg = getLockConfig();
-            if (cfg && (await sha256Hex(pin)) === cfg.hash) onVerified();
+            if (cfg && (await verifyPin(pin, cfg))) onVerified();
             else setError('PIN 不正确');
           }}
         >
@@ -154,7 +224,7 @@ function PinVerifyModal({ onVerified, onClose }: { onVerified: () => void; onClo
   );
 }
 
-/** 安全与隐私(M16-F01/F03,Web 形态):PIN 应用锁 + 隐私开关面板 */
+/** 安全与隐私:PIN 应用锁 + 隐私开关面板 */
 export function SecurityPanel({ onBack }: { onBack: () => void }) {
   const [cfg, setCfg] = useState<LockConfig | null>(() => getLockConfig());
   const [mode, setMode] = useState<'none' | 'setup' | 'verify-off'>('none');
@@ -172,7 +242,7 @@ export function SecurityPanel({ onBack }: { onBack: () => void }) {
         </div>
         {!cfg?.enabled && (
           <div className="me-row">
-            <span className="muted small">Web 端为 PIN 锁;手势/生物识别在 App 端提供</span>
+            <span className="muted small">Web 端为 PIN 锁(PBKDF2 加盐存储);手势/生物识别在 App 端提供</span>
             <button className="mini" onClick={() => setMode('setup')}>开启</button>
           </div>
         )}
@@ -186,7 +256,7 @@ export function SecurityPanel({ onBack }: { onBack: () => void }) {
 
       <div className="me-section">
         <div className="me-row static-row">
-          <span>隐私开关</span>
+          <span>隐私开关面板</span>
         </div>
         <div className="me-row static-row">
           <div>
@@ -233,9 +303,9 @@ export function SecurityPanel({ onBack }: { onBack: () => void }) {
       {mode === 'setup' && (
         <PinSetupModal
           onClose={() => setMode('none')}
-          onDone={async (hash) => {
-            const next: LockConfig = { hash, enabled: true };
-            localStorage.setItem(LOCK_KEY, JSON.stringify(next));
+          onDone={async (hash, salt) => {
+            const next: LockConfig = { v: 2, salt, hash, enabled: true };
+            saveLockConfig(next);
             setCfg(next);
             setMode('none');
           }}

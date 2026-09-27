@@ -309,7 +309,12 @@ export const refresh_tokens = pgTable(
 
 export const phone_codes = pgTable('phone_codes', {
   phone: text('phone').primaryKey(),
-  code: text('code').notNull(),
+  /** 只存 HMAC 摘要,不存明文(F-06) */
+  code_hash: text('code_hash').notNull(),
+  /** 验证失败次数(≥5 次锁定,重发时重置) */
+  attempts: integer('attempts').notNull().default(0),
+  /** 冷却:60s 内不允许重发(F-07) */
+  last_sent_at: timeMs('last_sent_at').notNull().default(0),
   expires_at: timeMs('expires_at').notNull(),
   used: boolean('used').notNull().default(false),
   created_at: timeMs('created_at').notNull(),
