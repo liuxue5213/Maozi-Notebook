@@ -46,6 +46,7 @@ cd apps/mobile && pnpm start                # 需 Expo 开发环境/模拟器
 ## 已实现(V1.0 迭代 0)
 
 - **离线优先闭环**(PRD M07-F01/F02):所有写操作先落本地库(IndexedDB),outbox 异步上行,断网可用,恢复后自动补同步
+- **安全加固 v2**(上线全检 P1 轮):全站限流(登录 5/min/IP、注册 3/h/IP、验证码 5/h/IP + 每号 60s 冷却、全局 100/min)、验证码 CSPRNG + HMAC 摘要存库 + 错 5 次锁定、`/v1/auth/logout` 全端下线(refresh TTL 30→14 天)、Web PIN PBKDF2+盐+失败锁定(旧哈希自动升级)、scrypt 异步化、`/readyz` 探活 DB、回收站 30 天自动清理 job
 - **同步协议 v2**(上线全检修复):客户端携带 `baseVersion` 编辑基线,服务端按基线做字段级合并——**多端并发双改不再静默丢失**(冲突即生成副本);坏 op 逐条 rejected + 客户端死信隔离,毒丸批次不再阻塞队列;越权 403 不回显服务端数据;服务端 8 项 PGlite 集成测试固化上述语义
 - **幂等上行**:客户端 UUID 主键 + client_version 版本裁决,网络重放返回 noop(PRD 5.4)
 - **增量下行**:server_version 游标,单批 ≤500,按账本成员范围过滤
