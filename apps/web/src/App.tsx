@@ -1,3 +1,4 @@
+import { cur } from './utils/currency';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { addAmount, billingCycleRange, daysUntilDue, subAmount } from '@ledgerone/domain';
@@ -56,7 +57,7 @@ function CreditBanner() {
   return (
     <div className="credit-banner">
       <span>
-        💳 {alert.name} 本期账单 ¥{Number(alert.bill).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}
+        💳 {alert.name} 本期账单 {cur()}{Number(alert.bill).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}
         {alert.dueIn > 0 ? `,${alert.dueIn} 天后还款` : alert.dueIn === 0 ? ',今天还款日' : ',已过还款日'}
       </span>
       <button

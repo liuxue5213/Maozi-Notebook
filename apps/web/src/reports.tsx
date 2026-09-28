@@ -1,3 +1,4 @@
+import { cur } from './utils/currency';
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { addAmount, cmpAmount, forecastMonthEnd, formatAmount, subAmount, type CategoryRow, type TransactionRow } from '@ledgerone/domain';
@@ -108,15 +109,15 @@ export function Reports() {
       <div className="report-overview">
         <div>
           <div className="label">本{periodLabel}支出</div>
-          <div className="num expense">¥{formatAmount(model.expense)}</div>
+          <div className="num expense">{cur()}{formatAmount(model.expense)}</div>
         </div>
         <div>
           <div className="label">本{periodLabel}收入</div>
-          <div className="num income">¥{formatAmount(model.income)}</div>
+          <div className="num income">{cur()}{formatAmount(model.income)}</div>
         </div>
         <div>
           <div className="label">结余</div>
-          <div className={`num ${Number(balance) >= 0 ? 'income' : 'expense'}`}>¥{formatAmount(balance)}</div>
+          <div className={`num ${Number(balance) >= 0 ? 'income' : 'expense'}`}>{cur()}{formatAmount(balance)}</div>
         </div>
       </div>
 
@@ -126,7 +127,7 @@ export function Reports() {
           <div className="forecast-main">
             <span>预计本月支出</span>
             <span className={`forecast-num ${((model.forecast.vsAvgPct ?? 0) > 0) ? 'expense' : 'income'}`}>
-              ¥{formatAmount(String(model.forecast.predicted))}
+              {cur()}{formatAmount(String(model.forecast.predicted))}
             </span>
             {model.forecast.vsAvgPct !== null && (
               <span className={`forecast-badge ${(model.forecast.vsAvgPct) > 0 ? 'up' : 'down'}`}>
@@ -135,12 +136,12 @@ export function Reports() {
             )}
           </div>
           <div className="muted small">
-            本月已花 ¥{formatAmount(String(model.forecast.elapsedDays >= 0 ? model.monthUsed : '0'))}(至 {model.forecast.elapsedDays}/{model.forecast.totalDays} 日)
-            {model.forecast.sampleMonths > 0 && <> · 近 {model.forecast.sampleMonths} 个月月均 ¥{formatAmount(String(Math.round(model.forecast.historyAvg ?? 0)))}</>}
+            本月已花 {cur()}{formatAmount(String(model.forecast.elapsedDays >= 0 ? model.monthUsed : '0'))}(至 {model.forecast.elapsedDays}/{model.forecast.totalDays} 日)
+            {model.forecast.sampleMonths > 0 && <> · 近 {model.forecast.sampleMonths} 个月月均 {cur()}{formatAmount(String(Math.round(model.forecast.historyAvg ?? 0)))}</>}
           </div>
           <div className="muted small">
-            按本月节奏 ¥{formatAmount(String(Math.round(model.forecast.paceEnd)))}
-            {model.forecast.historyEnd !== null && <> · 按历史同期 ¥{formatAmount(String(Math.round(model.forecast.historyEnd)))}</>}
+            按本月节奏 {cur()}{formatAmount(String(Math.round(model.forecast.paceEnd)))}
+            {model.forecast.historyEnd !== null && <> · 按历史同期 {cur()}{formatAmount(String(Math.round(model.forecast.historyEnd)))}</>}
             ,取两路平均
           </div>
         </div>
@@ -152,7 +153,7 @@ export function Reports() {
           {model.buckets.map((b, i) => {
             const max = Math.max(...model.buckets.map((x) => Number(x.amount)), 1);
             return (
-              <div key={i} className={`trend-col ${b.isCurrent ? 'current' : ''}`} title={`${b.label} ¥${formatAmount(b.amount)}`}>
+              <div key={i} className={`trend-col ${b.isCurrent ? 'current' : ''}`} title={`${b.label} ${cur()}${formatAmount(b.amount)}`}>
                 <div className="trend-bar-wrap">
                   <div className="trend-bar" style={{ height: `${Math.max((Number(b.amount) / max) * 100, Number(b.amount) > 0 ? 6 : 0)}%` }} />
                 </div>
@@ -202,7 +203,7 @@ export function Reports() {
                         <div className="rank-bar-fill" style={{ width: `${(Number(x.amount) / Number(total)) * 100}%`, background: PALETTE[i % PALETTE.length] }} />
                       </div>
                     </div>
-                    <div className="rank-amount">¥{formatAmount(x.amount)}</div>
+                    <div className="rank-amount">{cur()}{formatAmount(x.amount)}</div>
                   </button>
                 ))}
               </div>
@@ -272,13 +273,13 @@ function DrillDown({
   return (
     <div className="report-card">
       <button className="link back" onClick={onBack}>‹ 返回占比</button>
-      <div className="report-card-title">{top.icon} {top.name} · ¥{formatAmount(catTotal)}{Number(total) > 0 ? `(${((Number(catTotal) / Number(total)) * 100).toFixed(1)}%)` : ''}</div>
+      <div className="report-card-title">{top.icon} {top.name} · {cur()}{formatAmount(catTotal)}{Number(total) > 0 ? `(${((Number(catTotal) / Number(total)) * 100).toFixed(1)}%)` : ''}</div>
       <div className="rank-list">
         {direct && (
           <div className="rank-row static">
             <span className="tx-icon">{top.icon}</span>
             <div className="rank-main"><div className="rank-name">未分二级</div></div>
-            <div className="rank-amount">¥{formatAmount(direct.amount)} <span className="muted small">{direct.count} 笔</span></div>
+            <div className="rank-amount">{cur()}{formatAmount(direct.amount)} <span className="muted small">{direct.count} 笔</span></div>
           </div>
         )}
         {children.map((c, i) => (
@@ -290,7 +291,7 @@ function DrillDown({
                 <div className="rank-bar-fill" style={{ width: `${Number(catTotal) > 0 ? (Number(c.amount) / Number(catTotal)) * 100 : 0}%`, background: PALETTE[i % PALETTE.length] }} />
               </div>
             </div>
-            <div className="rank-amount">¥{formatAmount(c.amount)}</div>
+            <div className="rank-amount">{cur()}{formatAmount(c.amount)}</div>
           </div>
         ))}
         {!direct && children.length === 0 && <div className="muted" style={{ padding: 12, textAlign: 'center' }}>该分类本周期无记录</div>}
@@ -308,7 +309,7 @@ function DrillDown({
                     <div className="tx-name">{c?.name ?? '未分类'}</div>
                     <div className="tx-sub muted">{new Date(r.happened_at).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}{r.note ? ` · ${r.note}` : ''}</div>
                   </div>
-                  <div className={`tx-amount ${r.type}`}>{r.type === 'income' ? '+' : '-'}¥{formatAmount(r.amount)}</div>
+                  <div className={`tx-amount ${r.type}`}>{r.type === 'income' ? '+' : '-'}{cur()}{formatAmount(r.amount)}</div>
                 </div>
               );
             })}

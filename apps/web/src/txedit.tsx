@@ -1,3 +1,4 @@
+import { cur } from './utils/currency';
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { formatAmount, isValidAmount, newId, type TransactionRow, type TransactionType } from '@ledgerone/domain';
@@ -82,7 +83,7 @@ export function TxEditor({ tx, onClose }: { tx: TransactionRow; onClose: () => v
   };
 
   const remove = async () => {
-    if (!window.confirm(`删除该笔 ¥${formatAmount(tx.amount)}?进入回收站保留 30 天,可恢复。`)) return;
+    if (!window.confirm(`删除该笔 ${cur()}${formatAmount(tx.amount)}?进入回收站保留 30 天,可恢复。`)) return;
     const updated: TransactionRow = {
       ...tx,
       is_deleted: true,

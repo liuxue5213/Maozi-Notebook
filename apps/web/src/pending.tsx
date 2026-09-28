@@ -1,3 +1,4 @@
+import { cur } from './utils/currency';
 import { useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
@@ -169,7 +170,7 @@ function PendingRow({ pending, cats, accounts }: {
       <div className="pending-head">
         <div>
           <div className="tx-name">
-            {parsed.isExpense === false ? '+' : '-'}¥{formatAmount(parsed.amount ?? '0')}
+            {parsed.isExpense === false ? '+' : '-'}{cur()}{formatAmount(parsed.amount ?? '0')}
             {parsed.merchant && <span className="muted"> · {parsed.merchant}</span>}
           </div>
           <div className="tx-sub muted">{when}{parsed.note ? ` · ${parsed.note}` : ''}</div>
@@ -516,7 +517,7 @@ function TextImportModal({ onClose }: { onClose: () => void }) {
         {error && <div className="form-error">{error}</div>}
         {preview && (
           <div className="preview-box">
-            <div>共 <b>{preview.count}</b> 笔 · 合计 ¥{formatAmount(preview.total)}</div>
+            <div>共 <b>{preview.count}</b> 笔 · 合计 {cur()}{formatAmount(preview.total)}</div>
             <div className="muted small">{preview.year} 年 {preview.month} 月 · 无法解析 {preview.ignored} 行</div>
           </div>
         )}

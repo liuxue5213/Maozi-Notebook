@@ -1,3 +1,4 @@
+import { cur } from './utils/currency';
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
@@ -89,8 +90,8 @@ export function BudgetCard() {
       <div className="budget-card" onClick={() => setEditing(true)}>
         <div className="budget-head">
           <span>
-            本月预算 ¥{formatAmount(view.total)}
-            {carryTotal !== '0' && <span className="muted small"> (含结转 ¥{formatAmount(carryTotal)})</span>}
+            本月预算 {cur()}{formatAmount(view.total)}
+            {carryTotal !== '0' && <span className="muted small"> (含结转 {cur()}{formatAmount(carryTotal)})</span>}
           </span>
           <span className={`budget-pct level-${view.level}`}>{view.pct}%</span>
         </div>
@@ -98,12 +99,12 @@ export function BudgetCard() {
           <div className={`budget-bar-fill level-${view.level}`} style={{ width: `${Math.min(view.pct, 100)}%` }} />
         </div>
         <div className="budget-sub muted">
-          已用 ¥{formatAmount(view.used)} · 剩余 ¥{formatAmount(view.remaining)}
+          已用 {cur()}{formatAmount(view.used)} · 剩余 {cur()}{formatAmount(view.remaining)}
           {levelText && <span className={`budget-hint level-${view.level}`}> · {levelText}</span>}
         </div>
         <div className={`budget-forecast ${forecast.overRisk ? 'warn-text' : ''}`}>
-          📈 按当前速度月末约花 ¥{formatAmount(forecast.predictedSpend)}
-          {forecast.overRisk ? ' · 有超支风险' : ''} · 日均可用 ¥{formatAmount(forecast.dailyAvailable)}
+          📈 按当前速度月末约花 {cur()}{formatAmount(forecast.predictedSpend)}
+          {forecast.overRisk ? ' · 有超支风险' : ''} · 日均可用 {cur()}{formatAmount(forecast.dailyAvailable)}
         </div>
         {view.items.length > 0 && (
           <div className="budget-items" onClick={(e) => e.stopPropagation()}>
@@ -112,7 +113,7 @@ export function BudgetCard() {
                 <div className="budget-item-head">
                   <BudgetItemName categoryId={it.categoryId} />
                   <span className="muted small">
-                    ¥{formatAmount(it.used)} / ¥{formatAmount(it.amount)}
+                    {cur()}{formatAmount(it.used)} / {cur()}{formatAmount(it.amount)}
                   </span>
                 </div>
                 <div className="budget-item-bar">
@@ -263,7 +264,7 @@ function BudgetModal({
                     setItemDrafts((d) => ({ ...d, ...drafts }));
                   }}
                 >
-                  {t.name} ¥{Number(t.total).toLocaleString('zh-CN')}
+                  {t.name} {cur()}{Number(t.total).toLocaleString('zh-CN')}
                 </button>
               ))}
             </div>

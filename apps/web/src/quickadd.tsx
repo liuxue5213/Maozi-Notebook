@@ -1,3 +1,4 @@
+import { cur } from './utils/currency';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
@@ -124,7 +125,7 @@ export function QuickAdd({ onNeedAuth }: { onNeedAuth?: () => void }) {
     }
     setExpr(String(parseFloat(parsed.amount)));
     setVoiceOpen(false);
-    setToast(`已解析:${parsed.isIncome ? '收入' : '支出'} ¥${formatAmount(parsed.amount)}${target ? ` · ${target}` : ''},请确认后保存`);
+    setToast(`已解析:${parsed.isIncome ? '收入' : '支出'} ${cur()}${formatAmount(parsed.amount)}${target ? ` · ${target}` : ''},请确认后保存`);
   };
 
   const save = async () => {
@@ -169,7 +170,7 @@ export function QuickAdd({ onNeedAuth }: { onNeedAuth?: () => void }) {
     }
     const catName = type === 'transfer' ? '转账' : (categories?.find((c) => c.id === selectedCat)?.name ?? '');
     const label = cleanNote ? `${cleanName(cleanNote)}(${catName})` : catName;
-    setToast(`已记入${label} ¥${formatAmount(value)}`);
+    setToast(`已记入${label} ${cur()}${formatAmount(value)}`);
     setExpr('');
     setSelectedCat(null);
     setNote('');
@@ -223,14 +224,14 @@ export function QuickAdd({ onNeedAuth }: { onNeedAuth?: () => void }) {
         <div className="tpl-row">
           {templates.slice(0, 5).map((t) => (
             <button key={t.id} className="chip tpl-chip" onClick={() => applyTemplate(t)}>
-              {t.name} ¥{formatAmount(t.amount)}
+              {t.name} {cur()}{formatAmount(t.amount)}
             </button>
           ))}
         </div>
       )}
 
       <div className="amount-display">
-        <span className="currency">¥</span>
+        <span className="currency">{cur()}</span>
         <span className={expr ? '' : 'placeholder'}>{expr || '0'}</span>
         {expr && /[+\-×÷]/.test(expr) && <span className="preview">= {value ?? '错误'}</span>}
         <button className="mic-btn" title="语音记账" onClick={() => setVoiceOpen(true)}>🎤</button>
@@ -295,7 +296,7 @@ export function QuickAdd({ onNeedAuth }: { onNeedAuth?: () => void }) {
         ))}
       </div>
       <button className="save-btn" disabled={!valid} onClick={() => void save()}>
-        保存{value && valid ? ` ¥${formatAmount(value)}` : ''}
+        保存{value && valid ? ` ${cur()}${formatAmount(value)}` : ''}
       </button>
       <button className="tpl-save link" disabled={!valid} onClick={saveTemplate}>存为模板</button>
 
@@ -388,7 +389,7 @@ function VoiceModal({ onClose, onApply }: { onClose: () => void; onApply: (p: Vo
           <div className="preview-box">
             <div>解析预览(保存前可修改):</div>
             <div className="muted small">
-              {parsed.isIncome ? '收入' : '支出'} ¥{formatAmount(parsed.amount)}
+              {parsed.isIncome ? '收入' : '支出'} {cur()}{formatAmount(parsed.amount)}
               {parsed.categoryKeyword ? ` · ${parsed.categoryKeyword}` : ' · 未识别分类'}
             </div>
           </div>

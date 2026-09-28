@@ -1,3 +1,4 @@
+import { cur } from './utils/currency';
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
@@ -56,15 +57,15 @@ export function AccountsPage({ onBack }: { onBack: () => void }) {
         <div className="today-row">
           <div>
             <div className="label">资产</div>
-            <div className="num">¥{formatAmount(summary.assets)}</div>
+            <div className="num">{cur()}{formatAmount(summary.assets)}</div>
           </div>
           <div>
             <div className="label">负债</div>
-            <div className="num">¥{formatAmount(summary.liabilities)}</div>
+            <div className="num">{cur()}{formatAmount(summary.liabilities)}</div>
           </div>
           <div>
             <div className="label">净值</div>
-            <div className="num strong">¥{formatAmount(summary.net)}</div>
+            <div className="num strong">{cur()}{formatAmount(summary.net)}</div>
           </div>
         </div>
         <div className="month-row muted small">余额由流水实时推导 · 归档账户不计入汇总</div>
@@ -78,7 +79,7 @@ export function AccountsPage({ onBack }: { onBack: () => void }) {
               <div className="tx-name">{a.name}</div>
               <div className="tx-sub muted">{ACCOUNT_TYPE_LABELS[a.type as AccountType]}{a.include_in_net ? '' : ' · 不计净值'}</div>
             </div>
-            <div className={`tx-amount ${Number(summary.balances.get(a.id)) < 0 ? 'expense' : ''}`}>¥{formatAmount(summary.balances.get(a.id) ?? '0')}</div>
+            <div className={`tx-amount ${Number(summary.balances.get(a.id)) < 0 ? 'expense' : ''}`}>{cur()}{formatAmount(summary.balances.get(a.id) ?? '0')}</div>
           </div>
         ))}
         {archived.length > 0 && <div className="muted small" style={{ padding: '10px 6px 2px' }}>已归档(不计净值,历史保留)</div>}
@@ -89,7 +90,7 @@ export function AccountsPage({ onBack }: { onBack: () => void }) {
               <div className="tx-name">{a.name}</div>
               <div className="tx-sub muted">{ACCOUNT_TYPE_LABELS[a.type as AccountType]} · 已归档</div>
             </div>
-            <div className="tx-amount muted">¥{formatAmount(summary.balances.get(a.id) ?? '0')}</div>
+            <div className="tx-amount muted">{cur()}{formatAmount(summary.balances.get(a.id) ?? '0')}</div>
           </div>
         ))}
       </div>
@@ -105,13 +106,13 @@ export function AccountsPage({ onBack }: { onBack: () => void }) {
               <div>
                 <div className="tx-name">{TYPE_ICONS.credit_card} {c.account.name} 本期账单</div>
                 <div className="tx-sub muted">
-                  消费 ¥{formatAmount(c.spend)}
-                  {c.account.credit_limit != null && ` · 额度 ¥${formatAmount(c.account.credit_limit)}`}
+                  消费 {cur()}{formatAmount(c.spend)}
+                  {c.account.credit_limit != null && ` · 额度 ${cur()}${formatAmount(c.account.credit_limit)}`}
                   {c.dueIn != null && (c.dueIn > 0 ? ` · ${c.dueIn} 天后还款` : c.dueIn === 0 ? ' · 今天还款日' : ' · 还款日已过')}
                 </div>
               </div>
               <div className="credit-right">
-                <div className={`tx-amount ${Number(c.bill) > 0 ? 'expense' : 'income'}`}>¥{formatAmount(c.bill)}</div>
+                <div className={`tx-amount ${Number(c.bill) > 0 ? 'expense' : 'income'}`}>{cur()}{formatAmount(c.bill)}</div>
                 {Number(c.bill) > 0 && (
                   <button
                     className="mini"
@@ -148,7 +149,7 @@ async function repay(creditAccount: AccountRow, amount: string, accounts: Accoun
     window.alert('没有可用的现金/储蓄卡账户作为还款来源');
     return;
   }
-  if (!window.confirm(`从「${from.name}」向「${creditAccount.name}」还款 ¥${formatAmount(amount)}?`)) return;
+  if (!window.confirm(`从「${from.name}」向「${creditAccount.name}」还款 ${cur()}${formatAmount(amount)}?`)) return;
   const now = Date.now();
   const tx: TransactionRow = {
     id: newId(),

@@ -1,3 +1,4 @@
+import { cur } from './utils/currency';
 import { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { addAmount, formatAmount, type CategoryRow, type TransactionRow } from '@ledgerone/domain';
@@ -133,7 +134,7 @@ export function CalendarView() {
         </div>
         {model && (
           <div className="calendar-foot muted small">
-            本月支出 ¥{formatAmount(model.monthExpense)}
+            本月支出 {cur()}{formatAmount(model.monthExpense)}
           </div>
         )}
       </div>
@@ -155,7 +156,7 @@ export function CalendarView() {
                     <div className="tx-sub muted">{d._acc?.name ?? ''}{r.note ? ` · ${r.note}` : ''}</div>
                   </div>
                   <div className={`tx-amount ${r.type}`}>
-                    {r.type === 'income' ? '+' : '-'}¥{formatAmount(r.amount)}
+                    {r.type === 'income' ? '+' : '-'}{cur()}{formatAmount(r.amount)}
                   </div>
                 </div>
               );

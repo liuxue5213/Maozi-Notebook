@@ -1,3 +1,4 @@
+import { cur } from './utils/currency';
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { addAmount, formatAmount, subAmount, type CategoryRow, type TransactionRow } from '@ledgerone/domain';
@@ -40,16 +41,16 @@ export function TodayCard() {
       <div className="today-row">
         <div>
           <div className="label">今日支出</div>
-          <div className="num expense">¥{formatAmount(stats.todayExpense)}</div>
+          <div className="num expense">{cur()}{formatAmount(stats.todayExpense)}</div>
         </div>
         <div>
           <div className="label">今日收入</div>
-          <div className="num income">¥{formatAmount(stats.todayIncome)}</div>
+          <div className="num income">{cur()}{formatAmount(stats.todayIncome)}</div>
         </div>
       </div>
       <div className="month-row">
-        本月结余 <span className={Number(subAmount(stats.monthIncome, stats.monthExpense)) >= 0 ? 'income' : 'expense'}>¥{formatAmount(subAmount(stats.monthIncome, stats.monthExpense))}</span>
-        <span className="muted">(支 ¥{formatAmount(stats.monthExpense)} / 收 ¥{formatAmount(stats.monthIncome)})</span>
+        本月结余 <span className={Number(subAmount(stats.monthIncome, stats.monthExpense)) >= 0 ? 'income' : 'expense'}>{cur()}{formatAmount(subAmount(stats.monthIncome, stats.monthExpense))}</span>
+        <span className="muted">(支 {cur()}{formatAmount(stats.monthExpense)} / 收 {cur()}{formatAmount(stats.monthIncome)})</span>
       </div>
     </div>
   );
@@ -259,8 +260,8 @@ export function TransactionList() {
                   <header>
                     <span>{g.label}</span>
                     <span className="muted">
-                      支 ¥{formatAmount(g.expense)}
-                      {Number(g.income) > 0 ? ` · 收 ¥${formatAmount(g.income)}` : ''}
+                      支 {cur()}{formatAmount(g.expense)}
+                      {Number(g.income) > 0 ? ` · 收 ${cur()}${formatAmount(g.income)}` : ''}
                     </span>
                   </header>
                   {g.rows.map((r) => {
@@ -273,7 +274,7 @@ export function TransactionList() {
                           <div className="tx-sub muted">{d._acc?.name ?? ''}{r.note ? ` · ${r.note}` : ''}</div>
                         </div>
                         <div className={`tx-amount ${r.type}`}>
-                          {r.type === 'income' ? '+' : r.type === 'transfer' ? '' : '-'}¥{formatAmount(r.amount)}
+                          {r.type === 'income' ? '+' : r.type === 'transfer' ? '' : '-'}{cur()}{formatAmount(r.amount)}
                         </div>
                       </div>
                     );
@@ -304,7 +305,7 @@ export function TransactionList() {
               <div key={r.id} className="tx-row">
                 <span className="tx-icon muted">🗑️</span>
                 <div className="tx-main">
-                  <div className="tx-name muted">¥{formatAmount(r.amount)} · {r.type === 'expense' ? '支出' : r.type === 'income' ? '收入' : '转账'}</div>
+                  <div className="tx-name muted">{cur()}{formatAmount(r.amount)} · {r.type === 'expense' ? '支出' : r.type === 'income' ? '收入' : '转账'}</div>
                   <div className="tx-sub muted">删除于 {new Date(r.deleted_at ?? r.updated_at).toLocaleString('zh-CN')}</div>
                 </div>
                 <button className="mini" onClick={() => void restore(r)}>恢复</button>

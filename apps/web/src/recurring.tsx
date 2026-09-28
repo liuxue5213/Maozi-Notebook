@@ -1,3 +1,4 @@
+import { cur } from './utils/currency';
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
@@ -74,7 +75,7 @@ export function RecurringPage({ onBack }: { onBack: () => void }) {
           <div className="pending-head">
             <div>
               <div className="tx-name">
-                {r.paused ? '⏸ ' : ''}¥{formatAmount(r.amount)} · {freqLabel(r.frequency, r.interval)}
+                {r.paused ? '⏸ ' : ''}{cur()}{formatAmount(r.amount)} · {freqLabel(r.frequency, r.interval)}
               </div>
               <div className="tx-sub muted">
                 {catName(r.category_id)} · 下次 {new Date(r.next_run_at).toLocaleDateString('zh-CN')}
