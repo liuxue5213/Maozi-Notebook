@@ -311,8 +311,14 @@ export const phone_codes = pgTable('phone_codes', {
   phone: text('phone').primaryKey(),
   /** 只存 HMAC 摘要,不存明文(F-06) */
   code_hash: text('code_hash').notNull(),
-  /** 验证失败次数(≥5 次锁定,重发时重置) */
+  /** 验证失败次数(达到 CODE_MAX_ATTEMPTS 即写入 locked_until) */
   attempts: integer('attempts').notNull().default(0),
+  /**
+   * 锁定截止时间戳(F-06):连续失败 5 次后锁定 15 分钟。
+   * 锁定期间既拒绝校验也拒绝重发 —— 否则攻击者等 60s 重发即可绕过锁定,
+   * 使「5 次锁定」退化成「60 秒锁定」。解锁只能靠时间到期或成功重发(锁定外)。
+   */
+  locked_until: timeMs('locked_until').notNull().default(0),
   /** 冷却:60s 内不允许重发(F-07) */
   last_sent_at: timeMs('last_sent_at').notNull().default(0),
   expires_at: timeMs('expires_at').notNull(),

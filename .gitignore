@@ -6,6 +6,10 @@ dist-cjs/
 *.local
 *.log
 apps/server/data/
+# PGlite 内存库测试时的落盘产物(pglite://memorydb*),勿入库
+apps/server/memorydb*/
+apps/server/*.db/
+apps/server/*.sqlite*
 .DS_Store
 logs/
 output/

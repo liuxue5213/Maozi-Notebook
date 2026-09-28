@@ -12,7 +12,8 @@ const ACCESS_TTL_S = 2 * 60 * 60;
 const REFRESH_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 上线全检 F-08:30 天 → 14 天
 const CODE_TTL_MS = 10 * 60_000;
 const CODE_RESEND_COOLDOWN_MS = 60_000; // F-07:60s 冷却
-const CODE_MAX_ATTEMPTS = 5; // F-06:失败 5 次锁定(重发重置)
+const CODE_MAX_ATTEMPTS = 5; // F-06:连续失败 5 次锁定
+const CODE_LOCK_MS = 15 * 60_000; // F-06:锁定 15 分钟(锁定期内禁止校验与重发)
 
 export interface TokenPair {
   accessToken: string;
@@ -46,23 +47,30 @@ export class AuthService {
   }
 
   /**
-   * 发送验证码(F-06/F-07):CSPRNG(randomInt)生成,库中只存 HMAC 摘要;
-   * 60s 冷却内拒绝重发(重发会重置失败计数);
+   * 发送验证码(F-06/F-07):CSPRNG(randomInt)生成,库中只存 HMAC 摘要。
+   * 两道闸门(顺序不能反,否则「5 次锁定」会被 60s 重发架空):
+   * 1) locked_until 未过 → 拒绝(锁定期内既不许校验也不许重发);
+   * 2) 60s 冷却内拒绝重发。
+   * 重发只在**非锁定**状态下重置失败计数,且不清 locked_until(避免重发解锁)。
    * 生产接入真实短信通道(I01),开发态 DEV_MODE 直接返回便于联调。
    */
   async sendCode(phone: string): Promise<{ devCode?: string }> {
+    const now = Date.now();
     const last = (await db.select().from(s.phone_codes).where(eq(s.phone_codes.phone, phone)).limit(1))[0];
-    if (last && Date.now() - Number(last.last_sent_at) < CODE_RESEND_COOLDOWN_MS) {
+    if (last && Number(last.locked_until) > now) {
+      throw new AppError('auth.code.423', 423, `尝试次数过多,请 ${Math.ceil((Number(last.locked_until) - now) / 60_000)} 分钟后再试`);
+    }
+    if (last && now - Number(last.last_sent_at) < CODE_RESEND_COOLDOWN_MS) {
       throw new AppError('auth.code.429', 429, '发送过于频繁,请 60 秒后再试');
     }
     const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
     const codeHash = this.codeDigest(phone, code);
-    const now = Date.now();
     await db
       .insert(s.phone_codes)
       .values({ phone, code_hash: codeHash, attempts: 0, last_sent_at: now, expires_at: now + CODE_TTL_MS, used: false, created_at: now })
       .onConflictDoUpdate({
         target: s.phone_codes.phone,
+        // 不写 locked_until:重发不得清除已有的锁定
         set: { code_hash: codeHash, attempts: 0, last_sent_at: now, expires_at: now + CODE_TTL_MS, used: false },
       });
     return env.DEV_MODE && !env.IS_PROD ? { devCode: code } : {};
@@ -79,21 +87,35 @@ export class AuthService {
       return this.issue(u.id);
     }
     if (input.phone && input.code) {
+      const now = Date.now();
       const rec = (
         await db.select().from(s.phone_codes).where(eq(s.phone_codes.phone, input.phone)).limit(1)
       )[0];
       if (!rec) throw new AppError('auth.code.401', 401, '验证码错误或已过期');
-      if (rec.attempts >= CODE_MAX_ATTEMPTS) {
-        throw new AppError('auth.code.429', 429, '失败次数过多,请重新获取验证码');
+      // 锁定期内直接拒绝校验:否则「每 60s 重发一次」就能把 5 次锁定架空成 60s 锁定(F-06 核心)
+      if (Number(rec.locked_until) > now) {
+        throw new AppError('auth.code.423', 423, `尝试次数过多,请 ${Math.ceil((Number(rec.locked_until) - now) / 60_000)} 分钟后再试`);
       }
       const expect = Buffer.from(this.codeDigest(input.phone, input.code), 'hex');
       const got = Buffer.from(rec.code_hash, 'hex');
       const ok = expect.length === got.length && timingSafeEqual(expect, got);
-      if (!ok || rec.used || Date.now() > Number(rec.expires_at)) {
-        await db.update(s.phone_codes).set({ attempts: rec.attempts + 1 }).where(eq(s.phone_codes.phone, input.phone));
+      if (!ok || rec.used || now > Number(rec.expires_at)) {
+        const attempts = rec.attempts + 1;
+        const lock = attempts >= CODE_MAX_ATTEMPTS ? now + CODE_LOCK_MS : Number(rec.locked_until);
+        await db
+          .update(s.phone_codes)
+          .set({ attempts, locked_until: lock })
+          .where(eq(s.phone_codes.phone, input.phone));
+        if (lock > now) {
+          throw new AppError('auth.code.423', 423, `尝试次数过多,请 ${Math.ceil((lock - now) / 60_000)} 分钟后再试`);
+        }
         throw new AppError('auth.code.401', 401, '验证码错误或已过期');
       }
-      await db.update(s.phone_codes).set({ used: true }).where(eq(s.phone_codes.phone, input.phone));
+      // 校验成功:清零失败计数与锁定,并一次性消费
+      await db
+        .update(s.phone_codes)
+        .set({ used: true, attempts: 0, locked_until: 0 })
+        .where(eq(s.phone_codes.phone, input.phone));
       let u = (await db.select().from(s.users).where(eq(s.users.phone, input.phone)).limit(1))[0];
       if (!u) {
         const id = newId();

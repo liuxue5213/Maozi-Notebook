@@ -245,20 +245,42 @@ describe('F-06/F-07 验证码安全', () => {
     await expect(authService.sendCode(phone)).rejects.toMatchObject({ status: 429 });
   });
 
-  it('验证码错 5 次 → 锁定 429;重发重置后正确码登录成功', async () => {
+  it('验证码错 5 次 → 锁定 423;锁定期内正确码与重发均被拒(F-06 不可绕过)', async () => {
     const phone = uniquePhone();
     const { devCode } = await authService.sendCode(phone);
     expect(devCode).toBeTruthy();
-    for (let i = 0; i < 5; i++) {
+    // 前 4 次普通 401,第 5 次触发锁定(423)
+    for (let i = 0; i < 4; i++) {
       await expect(authService.login({ phone, code: '000000' })).rejects.toMatchObject({ status: 401 });
     }
-    // 拿到正确码也因锁定被拒
-    await expect(authService.login({ phone, code: devCode! })).rejects.toMatchObject({ status: 429 });
-    // 重发(测试中直接把 last_sent_at 拨回 60s 前以跳过冷却)
+    await expect(authService.login({ phone, code: '000000' })).rejects.toMatchObject({ status: 423 });
+    // 锁定后拿正确码也拒绝校验
+    await expect(authService.login({ phone, code: devCode! })).rejects.toMatchObject({ status: 423 });
+    // 锁定后把冷却拨回 60s 前再重发,仍必须被拒(否则「5 次锁定」会被 60s 重发架空)
     await db.execute(sql.raw(`update phone_codes set last_sent_at = ${Date.now() - 61_000} where phone = '${phone}'`));
-    const resend = await authService.sendCode(phone);
-    expect(resend.devCode).toBeTruthy();
-    const tokens = await authService.login({ phone, code: resend.devCode! });
-    expect(tokens.user.phone).toBe(phone);
+    await expect(authService.sendCode(phone)).rejects.toMatchObject({ status: 423 });
+  });
+
+  it('正确验证码可登录并一次性消费(重放失败)', async () => {
+    const phone = uniquePhone();
+    const { devCode } = await authService.sendCode(phone);
+    const pair = await authService.login({ phone, code: devCode! });
+    expect(pair.accessToken).toBeTruthy();
+    await expect(authService.login({ phone, code: devCode! })).rejects.toMatchObject({ code: 'auth.code.401' });
+  });
+});
+
+describe('F-08 登出与会话管理', () => {
+  it('revokeAllSessions 后旧 refresh token 不可再用(全端下线)', async () => {
+    const r = await authService.register({ email: `logout${Date.now()}@test.dev`, password: 'password123' });
+    await authService.revokeAllSessions(r.user.id);
+    await expect(authService.refresh(r.refreshToken)).rejects.toMatchObject({ status: 401 });
+  });
+
+  it('refresh 轮换:旧 refresh token 用后即废', async () => {
+    const r = await authService.register({ email: `rot${Date.now()}@test.dev`, password: 'password123' });
+    const next = await authService.refresh(r.refreshToken);
+    expect(next.refreshToken).toBeTruthy();
+    await expect(authService.refresh(r.refreshToken)).rejects.toMatchObject({ status: 401 });
   });
 });

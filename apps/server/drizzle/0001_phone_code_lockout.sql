@@ -1,0 +1,1 @@
+ALTER TABLE "phone_codes" ADD COLUMN "locked_until" bigint DEFAULT 0 NOT NULL;
