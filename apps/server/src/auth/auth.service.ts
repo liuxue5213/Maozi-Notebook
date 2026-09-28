@@ -7,6 +7,7 @@ import * as s from '../db/schema';
 import { env } from '../env';
 import { hashPassword, randomToken, sha256Hex, signJwt, verifyPassword } from '../common/crypto';
 import { AppError } from '../common/errors';
+import { logAudit, maskEmail, maskPhone } from '../common/audit';
 
 const ACCESS_TTL_S = 2 * 60 * 60;
 const REFRESH_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 上线全检 F-08:30 天 → 14 天
@@ -58,6 +59,7 @@ export class AuthService {
     const now = Date.now();
     const last = (await db.select().from(s.phone_codes).where(eq(s.phone_codes.phone, phone)).limit(1))[0];
     if (last && Number(last.locked_until) > now) {
+      logAudit({ action: 'auth.code.send_locked', target: maskPhone(phone), summary: { lockedUntil: Number(last.locked_until) } });
       throw new AppError('auth.code.423', 423, `尝试次数过多,请 ${Math.ceil((Number(last.locked_until) - now) / 60_000)} 分钟后再试`);
     }
     if (last && now - Number(last.last_sent_at) < CODE_RESEND_COOLDOWN_MS) {
@@ -82,6 +84,7 @@ export class AuthService {
         await db.select().from(s.users).where(eq(s.users.email, input.email.trim().toLowerCase())).limit(1)
       )[0];
       if (!u?.password_hash || !(await verifyPassword(input.password, u.password_hash))) {
+        logAudit({ action: 'auth.login.failed', target: maskEmail(input.email.trim().toLowerCase()), summary: { reason: 'bad_credentials' } });
         throw new AppError('auth.login.401', 401, '邮箱或密码错误');
       }
       return this.issue(u.id);
@@ -94,6 +97,7 @@ export class AuthService {
       if (!rec) throw new AppError('auth.code.401', 401, '验证码错误或已过期');
       // 锁定期内直接拒绝校验:否则「每 60s 重发一次」就能把 5 次锁定架空成 60s 锁定(F-06 核心)
       if (Number(rec.locked_until) > now) {
+        logAudit({ action: 'auth.code.locked', target: maskPhone(input.phone), summary: { phase: 'verify_refused' } });
         throw new AppError('auth.code.423', 423, `尝试次数过多,请 ${Math.ceil((Number(rec.locked_until) - now) / 60_000)} 分钟后再试`);
       }
       const expect = Buffer.from(this.codeDigest(input.phone, input.code), 'hex');
@@ -106,7 +110,9 @@ export class AuthService {
           .update(s.phone_codes)
           .set({ attempts, locked_until: lock })
           .where(eq(s.phone_codes.phone, input.phone));
+        logAudit({ action: 'auth.code.verify_failed', target: maskPhone(input.phone), summary: { attempts } });
         if (lock > now) {
+          logAudit({ action: 'auth.code.locked', target: maskPhone(input.phone), summary: { phase: 'lock_created', attempts } });
           throw new AppError('auth.code.423', 423, `尝试次数过多,请 ${Math.ceil((lock - now) / 60_000)} 分钟后再试`);
         }
         throw new AppError('auth.code.401', 401, '验证码错误或已过期');
@@ -137,8 +143,13 @@ export class AuthService {
         .where(and(eq(s.refresh_tokens.token_hash, hash), isNull(s.refresh_tokens.revoked_at), gt(s.refresh_tokens.expires_at, Date.now())))
         .limit(1)
     )[0];
-    if (!row) throw new AppError('auth.refresh.401', 401, '刷新令牌无效或已过期');
+    if (!row) {
+      logAudit({ action: 'auth.refresh.failed', target: 'invalid_or_expired_token' });
+      throw new AppError('auth.refresh.401', 401, '刷新令牌无效或已过期');
+    }
+    // 轮换语义:旧 token 立即吊销,一次性换新(留痕供盗用排查)
     await db.update(s.refresh_tokens).set({ revoked_at: Date.now() }).where(eq(s.refresh_tokens.id, row.id));
+    logAudit({ actorUserId: row.user_id, action: 'auth.refresh.rotated' });
     return this.issue(row.user_id);
   }
 
@@ -148,6 +159,7 @@ export class AuthService {
       .update(s.refresh_tokens)
       .set({ revoked_at: Date.now() })
       .where(and(eq(s.refresh_tokens.user_id, userId), isNull(s.refresh_tokens.revoked_at)));
+    logAudit({ actorUserId: userId, action: 'auth.logout' });
   }
 
   async me(userId: string) {

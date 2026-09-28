@@ -4,7 +4,7 @@
  * 覆盖:引导播种、幂等重放、并发双改(B4)、毒丸批次(B5)、越权 403(B3)、删除幂等、pull 游标推进。
  */
 import { readFileSync, readdirSync } from 'node:fs';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -282,5 +282,98 @@ describe('F-08 登出与会话管理', () => {
     const next = await authService.refresh(r.refreshToken);
     expect(next.refreshToken).toBeTruthy();
     await expect(authService.refresh(r.refreshToken)).rejects.toMatchObject({ status: 401 });
+  });
+});
+
+describe('安全审计留痕(audit_logs)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let schema: any;
+  beforeAll(async () => {
+    schema = await import('../src/db/schema');
+  });
+
+  const uniquePhone = () => `137${String(Date.now()).slice(-10)}`;
+
+  /** 审计为 fire-and-forget 写入:轮询至出现匹配行(避免测试假阴性) */
+  async function waitForAudit(action: string, filter?: (row: any) => boolean, timeoutMs = 3000): Promise<any> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const rows = await db.select().from(schema.audit_logs).where(eq(schema.audit_logs.action, action));
+      const hit = filter ? rows.find(filter) : rows[rows.length - 1];
+      if (hit) return hit;
+      if (Date.now() > deadline) throw new Error(`audit action not found: ${action}`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+
+  it('邮箱登录失败留痕:action=auth.login.failed,标识脱敏、不含密码', async () => {
+    const email = `auditfail${Date.now()}@test.dev`;
+    await expect(authService.login({ email, password: 'wrong-password' })).rejects.toMatchObject({ status: 401 });
+    const row = await waitForAudit('auth.login.failed', (r) => r.target_entity === 'au***@test.dev');
+    expect(row.summary).toMatchObject({ reason: 'bad_credentials' });
+    expect(JSON.stringify(row)).not.toContain('wrong-password');
+    expect(row.actor_user_id).toBeNull();
+  });
+
+  it('验证码错 5 次留痕 verify_failed × 5 + locked(lock_created);锁定期内校验/重发均留痕', async () => {
+    const phone = uniquePhone();
+    await authService.sendCode(phone);
+    for (let i = 0; i < 4; i++) {
+      await expect(authService.login({ phone, code: '000000' })).rejects.toMatchObject({ status: 401 });
+    }
+    await expect(authService.login({ phone, code: '000000' })).rejects.toMatchObject({ status: 423 });
+    const failed = await db.select().from(schema.audit_logs).where(eq(schema.audit_logs.action, 'auth.code.verify_failed'));
+    const mine = failed.filter((r: any) => r.target_entity === `****${phone.slice(-4)}`);
+    expect(mine.length).toBe(5);
+    expect(mine[4].summary).toMatchObject({ attempts: 5 });
+    await waitForAudit('auth.code.locked', (r) => r.target_entity === `****${phone.slice(-4)}` && r.summary?.phase === 'lock_created');
+    // 锁定期内:校验被拒与重发被拒各留一条(是攻击探测信号)
+    await expect(authService.login({ phone, code: '000000' })).rejects.toMatchObject({ status: 423 });
+    await db.execute(sql.raw(`update phone_codes set last_sent_at = ${Date.now() - 61_000} where phone = '${phone}'`));
+    await expect(authService.sendCode(phone)).rejects.toMatchObject({ status: 423 });
+    await waitForAudit('auth.code.send_locked', (r) => r.target_entity === `****${phone.slice(-4)}`);
+  });
+
+  it('refresh 轮换与失败留痕;登出留痕(全端下线)', async () => {
+    const r = await authService.register({ email: `audrot${Date.now()}@test.dev`, password: 'password123' });
+    await authService.refresh(r.refreshToken);
+    const rotated = await waitForAudit('auth.refresh.rotated', (x) => x.actor_user_id === r.user.id);
+    expect(rotated.summary).toBeNull();
+    await expect(authService.refresh('bogus-refresh-token-value')).rejects.toMatchObject({ status: 401 });
+    await waitForAudit('auth.refresh.failed', (x) => x.target_entity === 'invalid_or_expired_token');
+    await authService.revokeAllSessions(r.user.id);
+    await waitForAudit('auth.logout', (x) => x.actor_user_id === r.user.id);
+  });
+
+  it('sync 越权 403 留痕:攻击者 id + 目标行(截断),不泄露服务端数据', async () => {
+    const u1 = await register(`audvictim${Date.now()}@test.dev`);
+    const u2 = await register(`audattacker${Date.now()}@test.dev`);
+    const ids1 = await pullIds(u1.userId);
+    const ids2 = await pullIds(u2.userId);
+    const txId = `aud-tx-${Date.now()}`;
+    await seedTx(u1.userId, ids1.ledgerId, ids1.catId, ids1.accId, txId);
+    await syncService.push(u2.userId, [
+      op('transaction', txId, 2, {
+        id: txId, ledger_id: ids2.ledgerId, type: 'expense', amount: '0.01', amount_base: '0.01',
+        category_id: ids2.catId, account_id: ids2.accId, happened_at: Date.now(), note: '', client_version: 2,
+      }),
+    ]);
+    const row = await waitForAudit('sync.forbidden.403', (x) => x.actor_user_id === u2.userId);
+    expect(row.target_entity).toMatch(/^transaction:/);
+    expect(JSON.stringify(row.summary)).not.toContain('amount');
+    expect(row.ledger_id).toBeNull();
+  });
+
+  it('审计日志保留策略:90 天外的行被清理,近期保留(第 6 轮 P3)', async () => {
+    const old = Date.now() - 91 * 24 * 60 * 60 * 1000;
+    await db.execute(sql.raw(`insert into audit_logs (id, action, created_at) values ('audit-old', 'auth.login.failed', ${old})`));
+    await db.execute(sql.raw(`insert into audit_logs (id, action, created_at) values ('audit-new', 'auth.login.failed', ${Date.now()})`));
+    const { purgeAuditLogs } = await import('../src/purge');
+    const purged = await purgeAuditLogs();
+    expect(purged).toBeGreaterThanOrEqual(1);
+    const remaining = await db.select().from(schema.audit_logs);
+    const ids = remaining.map((r: any) => r.id);
+    expect(ids).not.toContain('audit-old');
+    expect(ids).toContain('audit-new');
   });
 });

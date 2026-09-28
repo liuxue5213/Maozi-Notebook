@@ -27,6 +27,6 @@ export const env = {
   PORT: Number(process.env.PORT ?? 60505),
   DEV_MODE: process.env.DEV_MODE === 'true',
   IS_PROD: process.env.NODE_ENV === 'production',
-  /** 允许的跨域来源,逗号分隔(F-09);开发态留空 = 反射任意来源 */
-  CORS_ORIGINS: process.env.CORS_ORIGINS ?? '',
+  /** 允许的跨域来源,逗号分隔(F-09);生产漏配 = 拒绝跨域(不反射),开发态留空 = 放行本地前端 */
+  CORS_ORIGIN: process.env.CORS_ORIGIN ?? '',
 };

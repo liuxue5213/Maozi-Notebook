@@ -279,19 +279,23 @@ export const sync_changes = pgTable(
   (t) => [index('sync_change_user_idx').on(t.user_id, t.server_version)],
 );
 
-/** 共享账本审计(PRD 6.3) */
+/**
+ * 审计日志(PRD 6.3 共享账本审计 + 上线全检安全审计):
+ * - 账本类事件(成员变更/越权尝试)填 ledger_id + actor_user_id;
+ * - 鉴权类事件(登录失败/锁定/refresh 轮换)无账本维度,两者可空,标识脱敏后入 summary/target_entity。
+ */
 export const audit_logs = pgTable(
   'audit_logs',
   {
     id: text('id').primaryKey(),
-    ledger_id: text('ledger_id').notNull(),
-    actor_user_id: text('actor_user_id').notNull(),
+    ledger_id: text('ledger_id'),
+    actor_user_id: text('actor_user_id'),
     action: text('action').notNull(),
     target_entity: text('target_entity'),
     summary: jsonb('summary'),
     created_at: timeMs('created_at').notNull(),
   },
-  (t) => [index('audit_ledger_idx').on(t.ledger_id, t.created_at)],
+  (t) => [index('audit_ledger_idx').on(t.ledger_id, t.created_at), index('audit_action_idx').on(t.action, t.created_at)],
 );
 
 export const refresh_tokens = pgTable(

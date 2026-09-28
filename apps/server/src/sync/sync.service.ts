@@ -8,6 +8,7 @@ import {
 import { db } from '../db/db';
 import * as s from '../db/schema';
 import { AppError } from '../common/errors';
+import { logAudit } from '../common/audit';
 import { bootstrapIfNeeded, reserveSeq } from '../db/bootstrap';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -52,6 +53,8 @@ export class SyncService {
    */
   async push(userId: string, ops: ChangeOp[]): Promise<{ results: PushChangeResult[] }> {
     const results: PushChangeResult[] = [];
+    // 同批 403 按原因去重留痕:防止单批 500 op 刷量膨胀 audit_logs(第 6 轮审查)
+    const auditedForbidden = new Set<string>();
     for (const op of ops) {
       try {
         const res = await db.transaction(async (tx) => {
@@ -64,6 +67,19 @@ export class SyncService {
       } catch (e) {
         // 任何错误(含 403 越权)都只拒收该 op 并附带原因,绝不阻塞队列;
         // 响应不含服务端数据,攻击者得不到任何回显(B3/B5)。
+        if (e instanceof AppError && e.status === 403) {
+          // 越权尝试留痕(上线全检审计待办):跨账本「搬家」/无权限写入是灰度期重点监控对象
+          const dedupeKey = `${e.code}:${e.message}`;
+          if (!auditedForbidden.has(dedupeKey)) {
+            auditedForbidden.add(dedupeKey);
+            logAudit({
+              actorUserId: userId,
+              action: 'sync.forbidden.403',
+              target: `${op.entity}:${op.entityId.slice(0, 8)}…`,
+              summary: { message: e.message },
+            });
+          }
+        }
         results.push({
           entityId: op.entityId,
           status: 'rejected',

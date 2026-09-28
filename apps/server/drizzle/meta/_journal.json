@@ -15,6 +15,13 @@
       "when": 1790566025822,
       "tag": "0001_phone_code_lockout",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790581230057,
+      "tag": "0002_audit_nullable",
+      "breakpoints": true
     }
   ]
 }
