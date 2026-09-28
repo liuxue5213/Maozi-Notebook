@@ -6,13 +6,14 @@ import {
 import {
   initSchema, metaGet, metaSet, recentTransactions, saveLocal, type AnyRow, type SQLiteLike,
 } from '@ledgerone/sqlite-sync';
-import { db } from './db';
+import { db, initEncryptedDb } from './db';
 
 let ready: Promise<void> | null = null;
 
-/** 启动:建表 + 本地播种(离线开箱可用,登录后与服务端收敛) */
+/** 启动:打开加密库(SQLCipher)→ 建表 + 本地播种(离线开箱可用,登录后与服务端收敛) */
 export function initDb(): Promise<void> {
   ready ??= (async () => {
+    await initEncryptedDb();
     await initSchema(db);
     await ensureSeed();
   })();

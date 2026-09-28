@@ -1,9 +1,15 @@
 import type { PullResponse, PushResponse, SyncTransport } from '@ledgerone/domain';
 import type { ChangeOp } from '@ledgerone/domain';
 import { metaGet, metaSet } from '@ledgerone/sqlite-sync';
+import * as SecureStore from 'expo-secure-store';
 import { db } from './db';
 
 const DEFAULT_SERVER = 'http://localhost:60505';
+
+/** token 存系统安全区(F-05):不再落 SQLite meta(整库加密外的第二道防线) */
+const SS_ACCESS = 'lo_access';
+const SS_REFRESH = 'lo_refresh';
+const SS_UID = 'lo_uid';
 
 export async function getServerUrl(): Promise<string> {
   return ((await metaGet(db, 'server_url')) as string) || DEFAULT_SERVER;
@@ -14,23 +20,31 @@ export async function setServerUrl(url: string): Promise<void> {
 }
 
 export async function getAccessToken(): Promise<string | null> {
-  return ((await metaGet(db, 'access_token')) as string) || null;
+  return SecureStore.getItemAsync(SS_ACCESS);
 }
 
 export async function getRefreshToken(): Promise<string | null> {
-  return ((await metaGet(db, 'refresh_token')) as string) || null;
+  return SecureStore.getItemAsync(SS_REFRESH);
 }
 
 export async function saveSession(data: { accessToken: string; refreshToken: string; user: { id: string } }): Promise<void> {
-  await metaSet(db, 'access_token', data.accessToken);
-  await metaSet(db, 'refresh_token', data.refreshToken);
-  await metaSet(db, 'uid', data.user.id);
+  await Promise.all([
+    SecureStore.setItemAsync(SS_ACCESS, data.accessToken),
+    SecureStore.setItemAsync(SS_REFRESH, data.refreshToken),
+    SecureStore.setItemAsync(SS_UID, data.user.id),
+  ]);
 }
 
 export async function clearSession(): Promise<void> {
-  await metaSet(db, 'access_token', null);
-  await metaSet(db, 'refresh_token', null);
-  await metaSet(db, 'uid', null);
+  await Promise.all([
+    SecureStore.deleteItemAsync(SS_ACCESS),
+    SecureStore.deleteItemAsync(SS_REFRESH),
+    SecureStore.deleteItemAsync(SS_UID),
+    // 清理旧版落库的明文 token(骨架期升级残留)
+    metaSet(db, 'access_token', null),
+    metaSet(db, 'refresh_token', null),
+    metaSet(db, 'uid', null),
+  ]);
 }
 
 export async function isLoggedIn(): Promise<boolean> {

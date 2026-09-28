@@ -6,6 +6,9 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "backgroundColor": "#f6f7f9",
+    "plugins": [
+      ["expo-sqlite", { "useSQLCipher": true }]
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.ledgerone.app",
