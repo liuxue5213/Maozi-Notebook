@@ -20,6 +20,15 @@ export default defineConfig({
     // CI 或无 Chrome 环境可改回默认 chromium 并执行 `playwright install chromium`
     channel: 'chrome',
   },
+  projects: [
+    { name: 'setup', testMatch: /auth\.setup\.ts/ },
+    {
+      name: 'main',
+      testIgnore: /auth\.setup\.ts/,
+      dependencies: ['setup'],
+      use: { storageState: 'e2e/.auth/state.json' }, // 共享登录态(注册限流 3/h,多旅程各自注册会撞墙)
+    },
+  ],
   webServer: [
     {
       command: 'node dist/main.js',

@@ -260,7 +260,7 @@ export function QuickAdd({ onNeedAuth }: { onNeedAuth?: () => void }) {
       ) : (
         <>
           <div className="category-grid">
-            {sorted.slice(0, 12).map((c) => (
+            {sorted.slice(0, 16).map((c) => (
               <button
                 key={c.id}
                 className={selectedCat === c.id ? 'selected' : ''}

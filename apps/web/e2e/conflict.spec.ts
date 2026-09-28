@@ -12,27 +12,6 @@ import { expect, test, type Page } from '@playwright/test';
 
 const API = 'http://localhost:60505';
 
-async function registerViaUi(page: Page, email: string, password: string): Promise<void> {
-  await page.goto('/');
-  await page.getByRole('navigation').getByRole('button', { name: /我的/ }).click();
-  await page.getByRole('button', { name: /登录 \/ 注册/ }).click();
-  await page.getByRole('button', { name: /没有账号/ }).click();
-  await page.getByPlaceholder('you@example.com').fill(email);
-  await page.getByPlaceholder('至少 8 位').fill(password);
-  await page.getByRole('button', { name: '注册并登录' }).click();
-  await expect(page.locator('.sync-badge')).toContainText(/已同步|已登录/, { timeout: 20_000 });
-}
-
-async function loginViaUi(page: Page, email: string, password: string): Promise<void> {
-  await page.goto('/');
-  await page.getByRole('navigation').getByRole('button', { name: /我的/ }).click();
-  await page.getByRole('button', { name: /登录 \/ 注册/ }).click();
-  await page.getByPlaceholder('you@example.com').fill(email);
-  await page.getByPlaceholder('至少 8 位').fill(password);
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page.locator('.sync-badge')).toContainText(/已同步|已登录/, { timeout: 20_000 });
-}
-
 async function addTxViaUi(page: Page, amount: string, note: string): Promise<void> {
   await page.getByRole('navigation').getByRole('button', { name: /记账/ }).click();
   for (const k of amount.replace('.', '').split('')) {
@@ -65,11 +44,12 @@ function pullTxsRaw(page: Page): Promise<Array<{ id: string; amount: string; not
 }
 
 /** 协议级 B 写入:同账号直改 pulled 行的备注并 push(返回 op 结果) */
-function pushNoteEdit(page: Page, note: string): Promise<{ status: string }> {
-  return page.evaluate(async ({ api, note }) => {
+function pushNoteEdit(page: Page, targetId: string, note: string): Promise<{ status: string }> {
+  return page.evaluate(async ({ api, targetId, note }) => {
     const token = localStorage.getItem('lo_access')!;
     const pull = await (await fetch(`${api}/v1/sync/pull?cursor=0&limit=1000`, { headers: { Authorization: `Bearer ${token}` } })).json();
-    const txRow = pull.rows.find((r: { entity: string; row: { is_deleted?: boolean } }) => r.entity === 'transaction' && !r.row.is_deleted)?.row;
+    // 共享账号跨旅程可能有其他流水:必须按本旅程创建的行 id 精确定位
+    const txRow = pull.rows.find((r: { entity: string; row: { id: string } }) => r.entity === 'transaction' && r.row.id === targetId)?.row;
     if (!txRow) return { status: 'no-tx-in-pull' };
     const op = {
       entity: 'transaction', entityId: txRow.id, op: 'upsert',
@@ -83,41 +63,46 @@ function pushNoteEdit(page: Page, note: string): Promise<{ status: string }> {
       body: JSON.stringify({ changes: [op] }),
     })).json();
     return res.results[0];
-  }, { api: API, note }) as Promise<{ status: string }>;
+  }, { api: API, targetId, note }) as Promise<{ status: string }>;
 }
 
 test('双端并发:离线改金额 × 在线改备注 → 三方合并为一行,两端修改都保留', async ({ browser }) => {
   test.setTimeout(120_000);
-  const email = `conflict-${Date.now()}@test.dev`;
-  const password = 'conflictpassword123';
-
   // 设备 A:注册 + 记一笔 ¥10「冲突原文」;轮询内反复点徽标强制同步
   // (无头 Chrome 下 2s 防抖定时器不可靠;引擎 busy 时 badge click 的 syncOnce 会被吞,故每轮重试)
-  const ctxA = await browser.newContext({ viewport: { width: 480, height: 900 } });
+  const ctxA = await browser.newContext({ viewport: { width: 480, height: 900 }, storageState: 'e2e/.auth/state.json' });
   const pageA = await ctxA.newPage();
-  await registerViaUi(pageA, email, password);
+  await pageA.goto('/');
+  await expect(pageA.locator('.sync-badge')).toContainText(/已同步|已登录/, { timeout: 20_000 }); // 共享登录态(设备 A)
   await addTxViaUi(pageA, '10', '冲突原文');
+  // 共享账号跨旅程存在其他流水:捕获本旅程目标行 id,后续全部按 id 精确断言
+  let targetId = '';
   await expect
     .poll(
       async () => {
         await pageA.locator('.sync-badge').click().catch(() => undefined);
-        return (await pullTxsRaw(pageA)).filter((t) => Number(t.amount) === 10).length;
+        const hit = (await pullTxsRaw(pageA)).find((t) => t.note === '冲突原文' && Number(t.amount) === 10);
+        targetId = hit?.id ?? '';
+        return hit ? 'found' : 'pending';
       },
       { timeout: 30_000, intervals: [1000, 2000] },
     )
-    .toBe(1);
+    .toBe('found');
+  expect(targetId).not.toBe('');
 
   // 设备 B:同账号登录(拉到同一份数据)
-  const ctxB = await browser.newContext({ viewport: { width: 480, height: 900 } });
+  // 设备 B:同账号第二上下文(同 storageState 即同账号)。
+  const ctxB = await browser.newContext({ viewport: { width: 480, height: 900 }, storageState: 'e2e/.auth/state.json' });
   const pageB = await ctxB.newPage();
-  await loginViaUi(pageB, email, password);
+  await pageB.goto('/');
+  await expect(pageB.locator('.sync-badge')).toContainText(/已同步|已登录/, { timeout: 20_000 });
 
   // A 离线改金额 10 → 66(本地落库、outbox 排队,不上行)
   await ctxA.setOffline(true);
   await editTxAmountViaUi(pageA, '66');
 
   // B 在线改备注:服务端 applied(此时金额仍 10)
-  const bResult = await pushNoteEdit(pageB, 'B在在线态修改');
+  const bResult = await pushNoteEdit(pageB, targetId, 'B在在线态修改');
   expect(bResult.status).toBe('applied');
 
   // A 恢复在线并强制同步:两端改的是不同字段(A 金额、B 备注)→ 无冲突,干净合并为一行
@@ -127,30 +112,28 @@ test('双端并发:离线改金额 × 在线改备注 → 三方合并为一行,
       async () => {
         await pageA.locator('.sync-badge').click().catch(() => undefined);
         const rows = await pullTxsRaw(pageB);
-        return rows.find((r) => Number(r.amount) === 66)?.note ?? 'pending';
+        return rows.find((r) => r.id === targetId)?.note ?? 'pending';
       },
       { timeout: 30_000, intervals: [1000, 2000] },
     )
     .toBe('B在在线态修改');
-  const serverRows = await pullTxsRaw(pageB);
-  expect(serverRows, '不同字段并发编辑:零冲突、零副本、零丢失,单行合并').toHaveLength(1);
-  expect(serverRows[0].note).toBe('B在在线态修改');
-  expect(Number(serverRows[0].amount)).toBe(66);
+  const merged = (await pullTxsRaw(pageB)).find((r) => r.id === targetId);
+  expect(Number(merged?.amount), 'A 的金额修改应用').toBe(66);
+  expect(merged?.note, 'B 的备注修改保留').toBe('B在在线态修改');
 
-  // A 本地 UI:主行被服务端裁决值覆盖(¥10)后与副本(¥66)并存展示
-  // A 本地收敛:单行合并结果(金额 66 + B 的备注)从服务端拉回
+  // A 本地收敛:合并结果(金额 66 + B 的备注)从服务端拉回
   await pageA.getByRole('navigation').getByRole('button', { name: /明细/ }).click();
   await expect
     .poll(
       async () =>
-        await pageA.evaluate(async () => {
-          const db = (window as unknown as { __ledgerone: { db: { transactions: { toArray(): Promise<Array<{ amount: string; note: string | null }>> } } } }).__ledgerone.db;
-          const rows = await db.transactions.toArray();
-          return rows.find((t) => Number(t.amount) === 66)?.note ?? 'pending';
-        }),
+        await pageA.evaluate(async (tid) => {
+          const db = (window as unknown as { __ledgerone: { db: { transactions: { toArray(): Promise<Array<{ id: string; amount: string; note: string | null }>> } } } }).__ledgerone.db;
+          const row = (await db.transactions.toArray()).find((t) => t.id === tid);
+          return row ? `${row.note}|${Number(row.amount)}` : 'pending';
+        }, targetId),
       { timeout: 20_000, intervals: [1000, 2000] },
     )
-    .toBe('B在在线态修改');
+    .toBe('B在在线态修改|66');
   await expect(pageA.getByText('-¥66.00').first()).toBeVisible({ timeout: 15_000 });
   await expect(pageA.getByText('B在在线态修改').first()).toBeVisible();
   await expect(pageA.getByText(/冲突副本/)).toHaveCount(0); // 不同字段并发:不再产生伪冲突副本

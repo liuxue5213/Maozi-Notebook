@@ -1,23 +1,12 @@
 /**
  * 多账本旅程(全检第 14 轮,M02 多账本端侧入口):
- * 注册 → 新建「出差账本」→ 自动切换 → 在新账本记账(校验 ledger 归属)→ 切回默认账本
+ * (共享登录态)新建「出差账本」→ 自动切换 → 在新账本记账(校验 ledger 归属)→ 切回默认账本
  * → 删除「出差账本」(级联软删 + 确认交互)→ 服务端墓碑收敛。
  * 语义:Web 端明细跨账本展示,「切换」决定新记账归入的账本(active_ledger)。
  */
 import { expect, test, type Page } from '@playwright/test';
 
 const API = 'http://localhost:60505';
-
-async function registerViaUi(page: Page, email: string, password: string): Promise<void> {
-  await page.goto('/');
-  await page.getByRole('navigation').getByRole('button', { name: /我的/ }).click();
-  await page.getByRole('button', { name: /登录 \/ 注册/ }).click();
-  await page.getByRole('button', { name: /没有账号/ }).click();
-  await page.getByPlaceholder('you@example.com').fill(email);
-  await page.getByPlaceholder('至少 8 位').fill(password);
-  await page.getByRole('button', { name: '注册并登录' }).click();
-  await expect(page.locator('.sync-badge')).toContainText(/已同步|已登录/, { timeout: 20_000 });
-}
 
 function pullLedgersRaw(page: Page): Promise<Array<{ id: string; name: string; is_deleted: boolean }>> {
   return page.evaluate(async (api) => {
@@ -31,10 +20,11 @@ function pullLedgersRaw(page: Page): Promise<Array<{ id: string; name: string; i
 
 test('多账本:新建/切换/归属校验/级联删除', async ({ page }) => {
   test.setTimeout(120_000);
-  const email = `ledger-${Date.now()}@test.dev`;
-  await registerViaUi(page, email, 'ledgerpassword123');
+  await page.goto('/');
+  await expect(page.locator('.sync-badge')).toContainText(/已同步|已登录/, { timeout: 20_000 }); // 共享登录态
 
   // ---- 新建「出差账本」(prompt 交互自动接受) ----
+  await page.getByRole('navigation').getByRole('button', { name: /我的/ }).click();
   await page.getByRole('button', { name: /账本管理/ }).click();
   await expect(page.getByText('账本管理')).toBeVisible();
   page.once('dialog', (d) => void d.accept('出差账本'));

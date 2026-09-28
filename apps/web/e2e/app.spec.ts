@@ -5,6 +5,9 @@
  */
 import { expect, test, type Page } from '@playwright/test';
 
+// 本旅程自带「注册新账号」步骤(覆盖注册/换号清库路径):显式清空共享登录态,从未登录开始
+test.use({ storageState: { cookies: [], origins: [] } });
+
 const email = `e2e-${Date.now()}@test.dev`;
 const password = 'e2epassword123';
 const pin = '135790';
