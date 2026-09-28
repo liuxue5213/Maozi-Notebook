@@ -1,12 +1,12 @@
 /**
- * 双端并发冲突旅程(全检第 12 轮,PRD 5.5 双版本并存 / B4 字段级合并的浏览器级验证):
+ * 双端并发编辑旅程(全检第 12/13 轮,PRD 5.5 / B4 字段级合并的浏览器级验证):
  * 设备 A 记账并同步 → A 离线改金额 → 设备 B(同账号)在线改备注(协议级写入:
  * B 登录后自带本地播种账本且无账本切换 UI,看不到 A 账本流水,故 B 用同权限的 sync/push 直改)
- * → A 恢复在线 → 服务端关键字段冲突裁决(金额保留 ¥10)+ A 生成「冲突副本」(¥66)。
+ * → A 恢复在线。
  *
- * ⚠️ 已知语义(第 12 轮发现,待 3-way merge 修复):非关键字段为整载荷 LWW ——
- * A 推送携带的陈旧备注会覆盖 B 较新的备注(服务端主行 note 回落为 A 的「冲突原文」)。
- * 金额等关键字段有冲突保护不受影响;本用例按当前语义断言,修复后应改断言主行 note=B 的修改。
+ * 三方合并(第 13 轮)下的期望结果:两端改的是**不同字段**(A 金额、B 备注)→ 无冲突,
+ * 干净合并为一行(金额 66 + 备注 B 的修改)——第 12 轮 LWW 时代的「冲突副本 + 备注被覆盖」
+ * 两者都不再发生。关键字段双方都改的冲突副本路径由服务端集成测试(B4/三方合并场景)守护。
  */
 import { expect, test, type Page } from '@playwright/test';
 
@@ -86,7 +86,7 @@ function pushNoteEdit(page: Page, note: string): Promise<{ status: string }> {
   }, { api: API, note }) as Promise<{ status: string }>;
 }
 
-test('双端并发:离线改金额 × 在线改备注 → 金额冲突保护 + 冲突副本,数据不丢', async ({ browser }) => {
+test('双端并发:离线改金额 × 在线改备注 → 三方合并为一行,两端修改都保留', async ({ browser }) => {
   test.setTimeout(120_000);
   const email = `conflict-${Date.now()}@test.dev`;
   const password = 'conflictpassword123';
@@ -120,43 +120,40 @@ test('双端并发:离线改金额 × 在线改备注 → 金额冲突保护 + �
   const bResult = await pushNoteEdit(pageB, 'B在在线态修改');
   expect(bResult.status).toBe('applied');
 
-  // A 恢复在线并强制同步:关键字段(金额)冲突 → 服务端保留 10,客户端生成冲突副本(66)
+  // A 恢复在线并强制同步:两端改的是不同字段(A 金额、B 备注)→ 无冲突,干净合并为一行
   await ctxA.setOffline(false);
   await expect
     .poll(
       async () => {
         await pageA.locator('.sync-badge').click().catch(() => undefined);
-        return (await pullTxsRaw(pageB)).length;
+        const rows = await pullTxsRaw(pageB);
+        return rows.find((r) => Number(r.amount) === 66)?.note ?? 'pending';
       },
       { timeout: 30_000, intervals: [1000, 2000] },
     )
-    .toBe(2);
+    .toBe('B在在线态修改');
   const serverRows = await pullTxsRaw(pageB);
-  const main = serverRows.find((r) => Number(r.amount) === 10);
-  const copy = serverRows.find((r) => Number(r.amount) === 66);
-  expect(main, '主行(金额 10)必须存在——关键字段冲突保护生效').toBeTruthy();
-  expect(copy, '冲突副本(金额 66)必须存在——双版本并存').toBeTruthy();
-  expect(copy?.note).toContain('冲突副本');
-  // 当前 LWW 语义的已知边界:A 的陈旧备注覆盖了 B 的较新备注(见文件头说明)
-  expect(main?.note).toBe('冲突原文');
+  expect(serverRows, '不同字段并发编辑:零冲突、零副本、零丢失,单行合并').toHaveLength(1);
+  expect(serverRows[0].note).toBe('B在在线态修改');
+  expect(Number(serverRows[0].amount)).toBe(66);
 
   // A 本地 UI:主行被服务端裁决值覆盖(¥10)后与副本(¥66)并存展示
+  // A 本地收敛:单行合并结果(金额 66 + B 的备注)从服务端拉回
   await pageA.getByRole('navigation').getByRole('button', { name: /明细/ }).click();
   await expect
     .poll(
       async () =>
         await pageA.evaluate(async () => {
-          const db = (window as unknown as { __ledgerone: { db: { transactions: { toArray(): Promise<Array<{ amount: string }>> } } } }).__ledgerone.db;
-          return (await db.transactions.toArray()).map((t) => t.amount).sort();
+          const db = (window as unknown as { __ledgerone: { db: { transactions: { toArray(): Promise<Array<{ amount: string; note: string | null }>> } } } }).__ledgerone.db;
+          const rows = await db.transactions.toArray();
+          return rows.find((t) => Number(t.amount) === 66)?.note ?? 'pending';
         }),
       { timeout: 20_000, intervals: [1000, 2000] },
     )
-    .toEqual(['10.0000', '66.0000']); // 主行收敛服务端值(4 位定点);副本保留 A 的 66
+    .toBe('B在在线态修改');
   await expect(pageA.getByText('-¥66.00').first()).toBeVisible({ timeout: 15_000 });
-  await expect(pageA.getByText('-¥10.00').first()).toBeVisible();
-  await expect(pageA.getByText(/冲突副本/)).toBeVisible();
-  await expect(pageA.getByText('-¥10.00')).toBeVisible();
-  await expect(pageA.getByText(/冲突副本/)).toBeVisible();
+  await expect(pageA.getByText('B在在线态修改').first()).toBeVisible();
+  await expect(pageA.getByText(/冲突副本/)).toHaveCount(0); // 不同字段并发:不再产生伪冲突副本
 
   await ctxA.close();
   await ctxB.close();

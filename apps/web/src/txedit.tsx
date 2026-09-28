@@ -47,7 +47,8 @@ export function TxEditor({ tx, onClose }: { tx: TransactionRow; onClose: () => v
       updated_at: Date.now(),
     };
     await db.transactions.put(updated);
-    enqueue('transaction', updated as unknown as Record<string, unknown>);
+    // base = 打开编辑器时所见的行(tx):服务端三方合并的公共祖先,防陈旧字段覆盖并发修改(第 13 轮)
+    enqueue('transaction', updated as unknown as Record<string, unknown>, 'upsert', tx as unknown as Record<string, unknown>);
     onClose();
   };
 

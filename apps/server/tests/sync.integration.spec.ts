@@ -115,6 +115,40 @@ describe('B4 并发双改不再丢数据', () => {
     expect(Number(row.amount)).toBe(26);
   });
 
+  it('三方合并(第 13 轮):A 携陈旧备注的冲突推送不覆盖 B 较新备注(op.base)', async () => {
+    const { userId } = await register(`threeway${Date.now()}@test.dev`);
+    const { ledgerId, catId, accId } = await pullIds(userId);
+    const txId = `tw-${Date.now()}`;
+    const happenedAt = Date.now();
+    const first = await seedTx(userId, ledgerId, catId, accId, txId, happenedAt);
+    const s1 = first.serverVersion!;
+    const baseRow = {
+      id: txId, ledger_id: ledgerId, type: 'expense', currency: 'CNY', note: '',
+      category_id: catId, account_id: accId, happened_at: happenedAt, client_version: 1,
+    };
+
+    // B:改备注(在线,applied)
+    await syncService.push(userId, [
+      op('transaction', txId, 2, { ...baseRow, amount: '26', amount_base: '26', note: 'B 的备注', client_version: 2 }, s1),
+    ]);
+
+    // A:离线期间改金额 30,载荷携带陈旧备注(base 快照 = 编辑时所见证本)
+    const resA = await syncService.push(userId, [
+      {
+        ...op('transaction', txId, 2, { ...baseRow, amount: '30', amount_base: '30', note: '', client_version: 2 }, s1),
+        base: { ...baseRow, amount: '26', amount_base: '26', note: '', server_version: s1 },
+      },
+    ]);
+    // 金额为关键字段且双方都改(base 26 → 服务端 26?B 只改了备注,服务端金额仍 26)→ 仅客户端改金额 → applied
+    expect(resA.results[0].status).toBe('applied');
+
+    // 服务端行:金额应用 A 的 30;备注保留 B 的「B 的备注」(旧 LWW 会回落为 A 载荷里的空备注)
+    const pull3 = await syncService.pull(userId, 0);
+    const row3 = pull3.rows.find((r) => r.entity === 'transaction' && (r.row as any).id === txId)!.row as Record<string, unknown>;
+    expect(Number(row3.amount)).toBe(30);
+    expect(row3.note).toBe('B 的备注');
+  });
+
   it('幂等重放:同载荷重复上行 → noop', async () => {
     const { userId } = await register(`replay${Date.now()}@test.dev`);
     const { ledgerId, catId, accId } = await pullIds(userId);

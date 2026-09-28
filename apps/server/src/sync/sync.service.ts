@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { and, eq, gt, inArray } from 'drizzle-orm';
-import { hasEffectiveChanges, mergeServerRow } from '@ledgerone/sync';
+import { hasEffectiveChanges, mergeServerRow, mergeThreeWay } from '@ledgerone/sync';
 import {
   newId, sanitizeEntityPayload,
   type ChangeOp, type EntityKind, type PullResponse, type PullRow, type PushChangeResult,
@@ -162,11 +162,14 @@ export class SyncService {
     // 幂等重放(网络重试/重复出队):载荷与现有行完全等效 → noop(PRD 5.4)。
     // 并发安全由「载荷等效 + 字段级合并」共同保证:任何与现有行不一致的载荷一律走合并,
     // 关键字段(MANUAL_FIELDS)冲突不裁决,绝不静默丢弃客户端修改(B4,有集成测试守护)。
-    // 注:op.baseVersion 目前仅作协议预留/排查线索(客户端编辑基线),服务端裁决不依赖它。
     if (!hasEffectiveChanges(existing, payload)) {
       return { entityId: op.entityId, status: 'noop' };
     }
-    const { merged, conflicts } = mergeServerRow(existing, payload);
+    // 三方合并(第 13 轮):op.base 为编辑基线快照时逐字段三方对比,修复「陈旧非关键字段
+    // 静默覆盖较新修改」;旧客户端不带 base → 退化整载荷 LWW(mergeServerRow,向后兼容)。
+    const { merged, conflicts } = op.base
+      ? mergeThreeWay(existing, payload, op.base)
+      : mergeServerRow(existing, payload);
     merged.client_version = Math.max(Number(existing.client_version) || 0, op.clientVersion);
     merged.server_version = nextSeq();
     merged.updated_at = now;

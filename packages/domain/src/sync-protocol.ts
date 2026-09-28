@@ -17,6 +17,11 @@ export interface ChangeOp {
   clientVersion: number;
   /** 客户端编辑时所见的服务端版本号(编辑基线);纯本地从未同步的行(服务端 version < 0);并发判定依据 */
   baseVersion?: number | null;
+  /**
+   * 编辑基线快照(第 13 轮 3-way merge):用户编辑时所见的整行,服务端逐字段三方对比用。
+   * 可选 —— 缺省时服务端退化为整载荷 LWW(旧行为,向后兼容);TxEdit 等编辑入口应传入。
+   */
+  base?: Record<string, unknown> | null;
   occurredAt: number;
   deviceId?: string;
 }
@@ -64,6 +69,7 @@ export const changeOpSchema = z.object({
   payload: z.record(z.unknown()),
   clientVersion: z.number().int().positive(),
   baseVersion: z.number().int().nonnegative().nullable().optional(),
+  base: z.record(z.unknown()).nullable().optional(),
   occurredAt: z.number().int().nonnegative(),
   deviceId: z.string().default(''),
 });

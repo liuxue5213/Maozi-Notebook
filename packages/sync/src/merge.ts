@@ -68,3 +68,37 @@ export function hasEffectiveChanges(server: Record<string, unknown>, incoming: R
   }
   return false;
 }
+
+/**
+ * 三方字段级合并(第 13 轮,修复「非关键字段整载荷 LWW 静默覆盖」):
+ * 以客户端编辑基线快照(base)为公共祖先逐字段对比 ——
+ * - 仅客户端改 → 应用客户端值;
+ * - 仅服务端改 → 保留服务端值(客户端载荷只是「没动该字段」,不得覆盖较新修改);
+ * - 双方都改 → 关键字段冲突保留服务端值并入冲突清单(客户端生成冲突副本);非关键字段服务端优先。
+ * base 缺省时调用方应退化为 mergeServerRow(整载荷 LWW,向后兼容旧客户端)。
+ */
+export function mergeThreeWay<T extends Record<string, unknown>>(
+  server: T,
+  incoming: T,
+  base: Record<string, unknown>,
+): { merged: Record<string, unknown>; conflicts: FieldConflict[] } {
+  const merged: Record<string, unknown> = { ...server };
+  const conflicts: FieldConflict[] = [];
+  const keys = new Set([...Object.keys(server), ...Object.keys(incoming)]);
+  for (const k of keys) {
+    if (META_FIELDS.has(k)) continue;
+    const sv = server[k];
+    const iv = incoming[k];
+    const bv = base[k];
+    const clientChanged = !valuesEqual(iv, bv);
+    const serverChanged = !valuesEqual(sv, bv);
+    if (!clientChanged) continue; // 客户端未动该字段:一律保留服务端值(含并发方的较新修改)
+    if (!serverChanged) {
+      if (iv !== undefined) merged[k] = iv; // 仅客户端改:应用
+      continue;
+    }
+    // 双方都改:关键字段冲突(双版本并存);非关键字段服务端优先(不丢已收敛的较新值)
+    if (MANUAL_FIELDS.has(k)) conflicts.push({ field: k });
+  }
+  return { merged, conflicts };
+}

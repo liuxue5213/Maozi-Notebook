@@ -15,15 +15,21 @@ function getDeviceId(): string {
 }
 
 /** 本地写入后入队:所有写操作先落本地库,再异步同步(PRD 5.4 本地为第一写入口) */
-export function enqueue(entity: EntityKind, row: Record<string, unknown>, op: 'upsert' | 'delete' = 'upsert'): void {
+export function enqueue(
+  entity: EntityKind,
+  row: Record<string, unknown>,
+  op: 'upsert' | 'delete' = 'upsert',
+  base?: Record<string, unknown> | null,
+): void {
   void db.outbox.add({
     entity,
     entityId: String(row.id),
     op,
     payload: row,
-    // 客户端编辑基线(协议预留字段):记录编辑时所见的该行服务端版本号(纯本地未同步行为 null)。
-    // 当前服务端裁决不依赖它(并发安全由「载荷等效 + 字段级合并」保证),仅作排查线索保留。
+    // 客户端编辑基线:版本号 + 整行快照(base)。三方合并(第 13 轮)用 base 逐字段对比,
+    // 修复「陈旧非关键字段静默覆盖较新修改」;缺省 base 时服务端退化为整载荷 LWW(兼容旧客户端)。
     baseVersion: row.server_version == null ? null : Number(row.server_version),
+    base: base ?? null,
     clientVersion: Number(row.client_version ?? 1),
     occurredAt: Date.now(),
     deviceId: getDeviceId(),
