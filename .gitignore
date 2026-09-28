@@ -22,4 +22,4 @@ test-results/
 playwright-report/
 
 # Playwright 共享登录态
-e2e/.auth/
+**/e2e/.auth/
