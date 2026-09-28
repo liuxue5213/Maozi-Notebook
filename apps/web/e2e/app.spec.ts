@@ -65,9 +65,10 @@ test('完整旅程:注册→记账→搜索→应用锁加密→登出重登', a
   await page.getByRole('button', { name: '开启应用锁' }).click();
   await expect.poll(() => page.evaluate(() => !!localStorage.getItem('lo_fenc')), { timeout: 20_000 }).toBe(true);
 
-  // ---- 直读 IndexedDB:落盘必须是密文 ----
-  const encrypted = await readRawNotes(page);
-  expect(encrypted.some((n) => n.startsWith('enc1:'))).toBe(true);
+  // ---- 直读 IndexedDB:落盘必须是密文(lo_fenc 先于清扫落盘,直接轮询密文出现) ----
+  await expect
+    .poll(async () => (await readRawNotes(page)).some((n) => n.startsWith('enc1:')), { timeout: 20_000 })
+    .toBe(true);
 
   // ---- 刷新 → 锁定门 → 错误 PIN 拒绝 / 正确 PIN 解锁 ----
   await page.reload();
