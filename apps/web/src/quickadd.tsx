@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
-  DEFAULT_CURRENCY, formatAmount, isValidAmount, newId, parseVoiceInput,
+  formatAmount, isValidAmount, newId, parseVoiceInput,
   type CategoryRow, type TransactionRow, type TransactionType, type VoiceParseResult,
 } from '@ledgerone/domain';
 import { db } from './db/db';
 import { getActiveLedgerId } from './db/seed';
+import { getBaseCurrency } from './sync/api';
 import { enqueue } from './sync/wiring';
 import { getUserId } from './sync/api';
 import { evaluateExpression } from './calc/evaluator';
@@ -139,7 +140,7 @@ export function QuickAdd({ onNeedAuth }: { onNeedAuth?: () => void }) {
       member_id: null,
       type,
       amount: value,
-      currency: DEFAULT_CURRENCY,
+      currency: getBaseCurrency(), // 主币种即记账币种(M16/账号设置,第 16 轮)
       amount_base: value,
       exchange_rate: null,
       category_id: type === 'transfer' ? null : selectedCat,

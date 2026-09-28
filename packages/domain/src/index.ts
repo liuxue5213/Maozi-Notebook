@@ -14,3 +14,4 @@ export * from './utils/recurring';
 export * from './utils/text-ledger';
 export * from './constants/budget-templates';
 export * from './constants/categories';
+export * from './constants/currencies';

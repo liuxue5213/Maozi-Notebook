@@ -1,7 +1,7 @@
 import { and, eq, gt, isNull } from 'drizzle-orm';
 import { Injectable } from '@nestjs/common';
 import { randomBytes, randomInt, createHmac, timingSafeEqual } from 'node:crypto';
-import { newId } from '@ledgerone/domain';
+import { newId, SUPPORTED_CURRENCIES } from '@ledgerone/domain';
 import { db } from '../db/db';
 import * as s from '../db/schema';
 import { env } from '../env';
@@ -163,6 +163,23 @@ export class AuthService {
   }
 
   async me(userId: string) {
+    const u = (await db.select().from(s.users).where(eq(s.users.id, userId)).limit(1))[0];
+    if (!u) throw new AppError('auth.user.404', 404, '用户不存在');
+    return this.publicUser(u);
+  }
+
+  /** 账号设置(M16/主币种,第 16 轮):昵称与主币种;主币种仅影响新建交易的记账币种,存量数据不回算 */
+  async updateMe(userId: string, patch: { nickname?: string; baseCurrency?: string }): Promise<ReturnType<AuthService['publicUser']>> {
+    const sets: Partial<typeof s.users.$inferInsert> = { updated_at: Date.now() };
+    if (patch.nickname !== undefined) sets.nickname = patch.nickname.trim().slice(0, 30);
+    if (patch.baseCurrency !== undefined) {
+      const cur = patch.baseCurrency.toUpperCase();
+      if (!(SUPPORTED_CURRENCIES as readonly string[]).includes(cur)) {
+        throw new AppError('user.currency.400', 400, `不支持的主币种: ${patch.baseCurrency}`);
+      }
+      sets.base_currency = cur;
+    }
+    await db.update(s.users).set(sets).where(eq(s.users.id, userId));
     const u = (await db.select().from(s.users).where(eq(s.users.id, userId)).limit(1))[0];
     if (!u) throw new AppError('auth.user.404', 404, '用户不存在');
     return this.publicUser(u);

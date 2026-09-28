@@ -31,4 +31,3 @@ export const PRESET_INCOME_CATEGORIES: PresetCategoryDef[] = [
   { name: '其他收入', icon: '➕', children: [] },
 ];
 
-export const DEFAULT_CURRENCY = 'CNY';

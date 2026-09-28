@@ -1,6 +1,7 @@
-import { Body, Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
+import { SUPPORTED_CURRENCIES } from '@ledgerone/domain';
 import { ZodValidationPipe } from '../common/zod.pipe';
 import { JwtGuard } from '../common/guard';
 import type { AuthedRequest } from '../common/guard';
@@ -11,6 +12,17 @@ const registerSchema = z.object({
   password: z.string().min(8).max(64),
   nickname: z.string().max(30).default(''),
 });
+
+const updateMeSchema = z
+  .object({
+    nickname: z.string().max(30).optional(),
+    baseCurrency: z
+      .string()
+      .transform((v) => v.toUpperCase())
+      .pipe(z.enum(SUPPORTED_CURRENCIES))
+      .optional(),
+  })
+  .refine((v) => v.nickname !== undefined || v.baseCurrency !== undefined, { message: '至少提供一项要更新的设置' });
 
 const codeSchema = z.object({ phone: z.string().regex(/^\d{5,20}$/) });
 
@@ -26,6 +38,7 @@ const loginSchema = z
 const refreshSchema = z.object({ refreshToken: z.string().min(10) });
 
 type RegisterBody = z.infer<typeof registerSchema>;
+type UpdateMeBody = z.infer<typeof updateMeSchema>;
 type CodeBody = z.infer<typeof codeSchema>;
 type LoginBody = z.infer<typeof loginSchema>;
 type RefreshBody = z.infer<typeof refreshSchema>;
@@ -61,6 +74,13 @@ export class AuthController {
   @UseGuards(JwtGuard)
   me(@Req() req: AuthedRequest) {
     return this.auth.me(req.userId);
+  }
+
+  /** 账号设置(第 16 轮):昵称 + 主币种(白名单校验,大小写归一) */
+  @Patch('v1/users/me')
+  @UseGuards(JwtGuard)
+  updateMe(@Req() req: AuthedRequest, @Body(new ZodValidationPipe(updateMeSchema)) body: UpdateMeBody) {
+    return this.auth.updateMe(req.userId, body);
   }
 
   /** 全端下线(F-08):吊销当前用户全部 refresh token */

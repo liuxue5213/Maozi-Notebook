@@ -32,12 +32,21 @@ export interface SessionUser {
   email: string | null;
   phone: string | null;
   nickname: string;
+  baseCurrency?: string;
 }
 
-export function saveTokens(data: { accessToken: string; refreshToken: string; user: { id: string } }): void {
+export function saveTokens(data: { accessToken: string; refreshToken: string; user: { id: string; nickname?: string; baseCurrency?: string } }): void {
   localStorage.setItem(ACCESS_KEY, data.accessToken);
   localStorage.setItem(REFRESH_KEY, data.refreshToken);
   localStorage.setItem(UID_KEY, data.user.id);
+  // 用户偏好缓存(第 16 轮主币种):登录/注册/刷新响应均带 publicUser,顺手落地供非 React 模块读取
+  if (data.user.baseCurrency) localStorage.setItem('lo_base_currency', data.user.baseCurrency);
+  if (data.user.nickname !== undefined) localStorage.setItem('lo_nickname', data.user.nickname);
+}
+
+/** 主币种(M16/账号设置):新建交易的记账币种来源;localStorage 由 saveTokens/设置页维护 */
+export function getBaseCurrency(): string {
+  return localStorage.getItem('lo_base_currency') ?? 'CNY';
 }
 export function clearTokens(): void {
   [ACCESS_KEY, REFRESH_KEY, UID_KEY].forEach((k) => localStorage.removeItem(k));
@@ -93,6 +102,9 @@ export const authApi = {
   login: (email: string, password: string) =>
     apiFetch('/v1/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   me: () => apiFetch('/v1/users/me') as Promise<SessionUser>,
+  /** 账号设置(第 16 轮):昵称/主币种;响应为更新后的 publicUser */
+  updateMe: (patch: { nickname?: string; baseCurrency?: string }) =>
+    apiFetch('/v1/users/me', { method: 'PATCH', body: JSON.stringify(patch) }) as Promise<SessionUser & { baseCurrency: string }>,
 };
 
 export function makeTransport(): SyncTransport {

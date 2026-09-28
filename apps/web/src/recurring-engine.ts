@@ -1,6 +1,7 @@
 import { isDue, newId, nextOccurrence, type RecurringRuleRow, type TransactionRow } from '@ledgerone/domain';
 import { db } from './db/db';
 import { enqueue } from './sync/wiring';
+import { getBaseCurrency } from './sync/api';
 
 /**
  * 周期记账到期生成(M01-F06):扫描未暂停且到期的规则,逐期生成流水并推进 next_run_at。
@@ -26,7 +27,7 @@ export async function runDueRecurring(now = Date.now()): Promise<number> {
         member_id: null,
         type,
         amount: cur.amount,
-        currency: 'CNY',
+        currency: getBaseCurrency(), // 主币种即记账币种(M16/第 16 轮)
         amount_base: cur.amount,
         exchange_rate: null,
         category_id: cur.category_id ?? null,

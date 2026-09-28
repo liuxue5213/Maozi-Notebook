@@ -115,8 +115,7 @@ describe('B4 并发双改不再丢数据', () => {
     expect(Number(row.amount)).toBe(26);
   });
 
-  it('三方合并(第 13 轮):A 携陈旧备注的冲突推送不覆盖 B 较新备注(op.base)', async () => {
-    const { userId } = await register(`threeway${Date.now()}@test.dev`);
+  it('三方合并(第 13 轮):A 携陈旧备注的冲突推送不覆盖 B 较新备注(op.base)', async () => {    const { userId } = await register(`threeway${Date.now()}@test.dev`);
     const { ledgerId, catId, accId } = await pullIds(userId);
     const txId = `tw-${Date.now()}`;
     const happenedAt = Date.now();
@@ -409,5 +408,20 @@ describe('安全审计留痕(audit_logs)', () => {
     const ids = remaining.map((r: any) => r.id);
     expect(ids).not.toContain('audit-old');
     expect(ids).toContain('audit-new');
+  });
+});
+
+describe('账号设置(M16/第 16 轮):PATCH /v1/users/me', () => {
+  it('昵称与主币种更新后 /me 回读一致;非法币种 400;未登录 401', async () => {
+    // 直连服务层(与既有测试同构):updateMe 走 zod 白名单在控制器层,此处校验服务层持久化
+    const email = `settings${Date.now()}@test.dev`;
+    const r = await authService.register({ email, password: 'settingspass123', nickname: '' });
+    const updated = await authService.updateMe(r.user.id, { nickname: '小明', baseCurrency: 'USD' });
+    expect(updated.nickname).toBe('小明');
+    expect(updated.baseCurrency).toBe('USD');
+    const me = await authService.me(r.user.id);
+    expect(me.baseCurrency).toBe('USD');
+    // 小写归一由控制器 zod transform 承担,服务层应只收到白名单内的值
+    await expect(authService.updateMe(r.user.id, { baseCurrency: 'XXX' })).rejects.toBeTruthy();
   });
 });

@@ -7,6 +7,7 @@ import { ExportPage } from './export';
 import { SecurityPanel } from './security';
 import { LedgerPanel } from './ledgers';
 import { CategoryPanel } from './categories';
+import { SettingsPage } from './settings';
 import { PendingPage } from './pending';
 import { RecurringPage } from './recurring';
 import { applyTheme, cycleTheme, getThemeMode, type ThemeMode } from './theme';
@@ -92,7 +93,7 @@ export function AuthModal({ onClose, onAuthed }: { onClose: () => void; onAuthed
 export function MeTab({ onOpenAuth, onAuthChanged }: { onOpenAuth: () => void; onAuthChanged: () => void }) {
   const sync = useSyncExternalStore(engine.subscribe, engine.getSnapshot);
   const [email, setEmail] = useState<string | null>(null);
-  const [view, setView] = useState<'menu' | 'accounts' | 'export' | 'security' | 'pending' | 'recurring' | 'ledgers' | 'categories'>('menu');
+  const [view, setView] = useState<'menu' | 'accounts' | 'export' | 'security' | 'pending' | 'recurring' | 'ledgers' | 'categories' | 'settings'>('menu');
   const [pendingCount, setPendingCount] = useState(0);
   const [theme, setTheme] = useState<ThemeMode>(() => getThemeMode());
 
@@ -132,6 +133,7 @@ export function MeTab({ onOpenAuth, onAuthChanged }: { onOpenAuth: () => void; o
   if (view === 'accounts') return <AccountsPage onBack={() => setView('menu')} />;
   if (view === 'ledgers') return <LedgerPanel onBack={() => setView('menu')} />;
   if (view === 'categories') return <CategoryPanel onBack={() => setView('menu')} />;
+  if (view === 'settings') return <SettingsPage onBack={() => setView('menu')} />;
   if (view === 'export') return <ExportPage onBack={() => setView('menu')} />;
   if (view === 'security') return <SecurityPanel onBack={() => setView('menu')} />;
   if (view === 'pending') return <PendingPage onBack={() => setView('menu')} />;
@@ -160,6 +162,10 @@ export function MeTab({ onOpenAuth, onAuthChanged }: { onOpenAuth: () => void; o
             <button className="me-row link-row" onClick={() => setView('categories')}>
               <span>分类管理 🏷️</span>
               <span className="muted">自定义 · 隐藏 · 删除 ›</span>
+            </button>
+            <button className="me-row link-row" onClick={() => setView('settings')}>
+              <span>账号设置 ⚙️</span>
+              <span className="muted">昵称 · 主币种 ›</span>
             </button>
             <button className="me-row link-row" onClick={() => setView('recurring')}>
               <span>周期记账 🔁</span>
@@ -220,6 +226,10 @@ export function MeTab({ onOpenAuth, onAuthChanged }: { onOpenAuth: () => void; o
             <button className="me-row link-row" onClick={() => setView('categories')}>
               <span>分类管理 🏷️</span>
               <span className="muted">自定义 · 隐藏 · 删除 ›</span>
+            </button>
+            <button className="me-row link-row" onClick={() => setView('settings')}>
+              <span>账号设置 ⚙️</span>
+              <span className="muted">昵称 · 主币种 ›</span>
             </button>
             <button className="me-row link-row" onClick={() => setView('recurring')}>
               <span>周期记账 🔁</span>
