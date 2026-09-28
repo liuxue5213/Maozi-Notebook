@@ -1,5 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { db } from './db/db';
+import {
+  enableFieldEncryption, disableFieldEncryption, unlockFieldEncryption, lockFieldEncryption,
+  fieldEncryptionConfigured,
+} from './crypto/keyring';
 
 const LOCK_KEY = 'lo_lock';
 const STAT_KEY = 'lo_stat_optin';
@@ -82,7 +86,10 @@ export function LockGate({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const onVis = () => {
-      if (document.hidden && isLockEnabled()) setLocked(true);
+      if (document.hidden && isLockEnabled()) {
+        lockFieldEncryption(); // 字段加密(F-05):锁定同时清除内存 DEK
+        setLocked(true);
+      }
     };
     document.addEventListener('visibilitychange', onVis);
     return () => document.removeEventListener('visibilitychange', onVis);
@@ -117,6 +124,13 @@ function LockOverlay({ onUnlock }: { onUnlock: () => void }) {
       }
       const reset: LockConfig = { ...getLockConfig()!, fails: 0, lockUntil: undefined };
       saveLockConfig(reset);
+      // 字段加密(F-05):解锁即恢复内存 DEK;存量用户(开启锁但尚未启用加密)借本次校验透明升级
+      try {
+        if (!fieldEncryptionConfigured()) await enableFieldEncryption(pin);
+        else await unlockFieldEncryption(pin);
+      } catch (e) {
+        console.warn('[security] 字段加密解锁失败(数据回退明文展示不影响可用性):', e);
+      }
       setPin('');
       onUnlock();
     } else {
@@ -165,7 +179,7 @@ function LockOverlay({ onUnlock }: { onUnlock: () => void }) {
   );
 }
 
-function PinSetupModal({ onDone, onClose }: { onDone: (hash: string, salt: string) => void; onClose: () => void }) {
+function PinSetupModal({ onDone, onClose }: { onDone: (hash: string, salt: string, pin: string) => void; onClose: () => void }) {
   const [pin, setPin] = useState('');
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -175,7 +189,7 @@ function PinSetupModal({ onDone, onClose }: { onDone: (hash: string, salt: strin
     if (!/^\d{4,6}$/.test(pin)) return setError('PIN 需为 4–6 位数字');
     if (pin !== confirm) return setError('两次输入不一致');
     const salt = newSalt();
-    onDone(await derivePinHash(pin, salt), salt);
+    onDone(await derivePinHash(pin, salt), salt, pin);
   };
 
   return (
@@ -197,7 +211,7 @@ function PinSetupModal({ onDone, onClose }: { onDone: (hash: string, salt: strin
   );
 }
 
-function PinVerifyModal({ onVerified, onClose }: { onVerified: () => void; onClose: () => void }) {
+function PinVerifyModal({ onVerified, onClose }: { onVerified: (pin: string) => void; onClose: () => void }) {
   const [pin, setPin] = useState('');
   const [error, setError] = useState<string | null>(null);
   return (
@@ -208,15 +222,15 @@ function PinVerifyModal({ onVerified, onClose }: { onVerified: () => void; onClo
           <input type="password" inputMode="numeric" maxLength={6} value={pin} autoFocus onChange={(e) => { setPin(e.target.value.replace(/\D/g, '')); setError(null); }} />
         </div>
         {error && <div className="form-error">{error}</div>}
-        <button
-          className="primary"
-          disabled={pin.length < 4}
-          onClick={async () => {
-            const cfg = getLockConfig();
-            if (cfg && (await verifyPin(pin, cfg))) onVerified();
-            else setError('PIN 不正确');
-          }}
-        >
+          <button
+            className="primary"
+            disabled={pin.length < 4}
+            onClick={async () => {
+              const cfg = getLockConfig();
+              if (cfg && (await verifyPin(pin, cfg))) onVerified(pin);
+              else setError('PIN 不正确');
+            }}
+          >
           确认
         </button>
       </div>
@@ -224,12 +238,13 @@ function PinVerifyModal({ onVerified, onClose }: { onVerified: () => void; onClo
   );
 }
 
-/** 安全与隐私:PIN 应用锁 + 隐私开关面板 */
+/** 安全与隐私:PIN 应用锁 + 端侧字段加密(F-05)+ 隐私开关面板 */
 export function SecurityPanel({ onBack }: { onBack: () => void }) {
   const [cfg, setCfg] = useState<LockConfig | null>(() => getLockConfig());
   const [mode, setMode] = useState<'none' | 'setup' | 'verify-off'>('none');
   const [stat, setStat] = useState(() => localStorage.getItem(STAT_KEY) === '1');
   const [crash, setCrash] = useState(() => localStorage.getItem(CRASH_KEY) === '1');
+  const [fenc, setFenc] = useState(() => fieldEncryptionConfigured());
 
   return (
     <div className="me-tab">
@@ -252,6 +267,16 @@ export function SecurityPanel({ onBack }: { onBack: () => void }) {
             <button className="mini" onClick={() => setMode('verify-off')}>关闭应用锁</button>
           </div>
         )}
+      </div>
+
+      <div className="me-section">
+        <div className="me-row static-row">
+          <span>端侧字段加密</span>
+          <span className="muted">{fenc ? '已开启 · 备注/导入原文等 AES-GCM 落盘加密' : '未开启'}</span>
+        </div>
+        <div className="me-row static-row">
+          <span className="muted small">开启应用锁后自动启用(密钥由 PIN 派生,只存内存);关闭应用锁会先全量解密落盘</span>
+        </div>
       </div>
 
       <div className="me-section">
@@ -303,18 +328,32 @@ export function SecurityPanel({ onBack }: { onBack: () => void }) {
       {mode === 'setup' && (
         <PinSetupModal
           onClose={() => setMode('none')}
-          onDone={async (hash, salt) => {
+          onDone={async (hash, salt, pin) => {
             const next: LockConfig = { v: 2, salt, hash, enabled: true };
             saveLockConfig(next);
             setCfg(next);
             setMode('none');
+            // 端侧字段加密(F-05):随应用锁一并开启,存量明文一次性重加密
+            try {
+              await enableFieldEncryption(pin);
+              setFenc(true);
+            } catch (e) {
+              console.warn('[security] 字段加密开启失败:', e);
+            }
           }}
         />
       )}
       {mode === 'verify-off' && (
         <PinVerifyModal
           onClose={() => setMode('none')}
-          onVerified={() => {
+          onVerified={async (pin) => {
+            // 先全量解密落盘,再移除配置(顺序反了会留下永久密文)
+            try {
+              await disableFieldEncryption(pin);
+            } catch (e) {
+              console.warn('[security] 字段加密关闭失败:', e);
+            }
+            setFenc(false);
             localStorage.removeItem(LOCK_KEY);
             setCfg(null);
             setMode('none');

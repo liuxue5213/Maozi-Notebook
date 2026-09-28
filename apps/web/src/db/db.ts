@@ -1,4 +1,6 @@
 import Dexie, { type Table } from 'dexie';
+import { installFieldEncryption } from '../crypto/secure-fields';
+import { bindSweepTables } from '../crypto/keyring';
 import type {
   AccountRow, AttachmentRow, BudgetItemRow, BudgetRow, CategoryRow, ChangeOp, DebtRow,
   LedgerMemberRow, LedgerRow, PendingTransactionRow, ReimbursementRow, RecurringRuleRow,
@@ -65,6 +67,16 @@ export class LedgerDB extends Dexie {
 }
 
 export const db = new LedgerDB();
+
+// 端侧字段级加密(F-05):敏感字段(备注/导入原文等)AES-GCM 落盘加密,
+// 密钥由应用锁 PIN 派生(见 crypto/keyring.ts);未开启应用锁时字段保持明文。
+installFieldEncryption(db);
+bindSweepTables({
+  transactions: db.transactions,
+  pending_transactions: db.pending_transactions,
+  outbox: db.outbox,
+  deadletter: db.deadletter,
+} as unknown as Record<string, { toArray: () => Promise<Record<string, unknown>[]>; bulkPut: (rows: unknown[]) => Promise<unknown> } | undefined>);
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export const TABLE_BY_ENTITY: Record<string, Table<any, string> | undefined> = {

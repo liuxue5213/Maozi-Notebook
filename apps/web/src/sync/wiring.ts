@@ -110,7 +110,14 @@ export async function prepareAfterLogin(): Promise<void> {
   const uid = getUserId();
   const last = (await db.meta.get('last_user'))?.value as string | undefined;
   if (uid && last && last !== uid) {
-    await wipeLocal();
+    await wipeLocal(); // 明确换号:旧账号本地数据全部清空
+  } else if (uid && !last) {
+    // last_user 缺失(第 5 轮 E2E 发现):须区分两种情形 ——
+    // 纯本地离线数据(从未登录:游标 0 且无任何服务端行)→ 保留并在本账号名下上行(离线优先,PRD M07);
+    // 旧账号残留(有过同步:游标 > 0 或存在服务端行)→ 清库,否则跨账号可见且遗留游标会吃掉新账号下行。
+    const cursor = ((await db.meta.get('sync_cursor'))?.value as number) ?? 0;
+    const hasServerRows = (await db.ledgers.filter((l) => l.server_version != null).count()) > 0;
+    if (cursor > 0 || hasServerRows) await wipeLocal();
   }
   if (uid) await db.meta.put({ key: 'last_user', value: uid });
   const txCount = await db.transactions.count();
