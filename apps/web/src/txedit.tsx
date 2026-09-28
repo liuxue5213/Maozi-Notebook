@@ -4,6 +4,7 @@ import { formatAmount, isValidAmount, newId, type TransactionRow, type Transacti
 import { db } from './db/db';
 import { enqueue } from './sync/wiring';
 import { fromLocalInputValue, toLocalInputValue } from './utils/period';
+import { getActiveLedgerId } from './db/seed';
 
 const TYPE_LABELS: Record<TransactionType, string> = { expense: '支出', income: '收入', transfer: '转账' };
 
@@ -19,7 +20,8 @@ export function TxEditor({ tx, onClose }: { tx: TransactionRow; onClose: () => v
   const [excludeBudget, setExcludeBudget] = useState(tx.exclude_from_budget);
   const [error, setError] = useState<string | null>(null);
 
-  const cats = useLiveQuery(async () => await db.categories.toArray(), []);
+  // 分类按当前账本作用域(M02 多账本)
+  const cats = useLiveQuery(async () => (await db.categories.where('ledger_id').equals(await getActiveLedgerId()).toArray()), []);
   const accounts = useLiveQuery(async () => (await db.accounts.toArray()).filter((a) => !a.is_archived), []);
 
   const selectedCat = cats?.find((c) => c.id === categoryId) ?? null;

@@ -32,7 +32,7 @@ export function RecurringPage({ onBack }: { onBack: () => void }) {
     const rules = (await db.recurring_rules.toArray())
       .filter((r) => !r.is_deleted && r.ledger_id === ledgerId)
       .sort((a, b) => a.next_run_at - b.next_run_at);
-    const cats = await db.categories.toArray();
+    const cats = (await db.categories.where('ledger_id').equals(ledgerId).toArray());
     const accounts = (await db.accounts.toArray()).filter((a) => !a.is_archived);
     const generated = (await db.transactions.toArray()).filter((t) => t.source === 'recurring' && !t.is_deleted).length;
     return { rules, cats, accounts, generated };

@@ -52,10 +52,13 @@ export function QuickAdd({ onNeedAuth }: { onNeedAuth?: () => void }) {
   const [templates, setTemplates] = useState<QuickTemplate[]>(() => loadTemplates());
 
   const categories = useLiveQuery(
-    async () =>
-      (await db.categories.toArray()).filter(
+    async () => {
+      // 分类按当前账本作用域(M02 多账本):避免多账本后选择器出现跨账本重复项
+      const ledgerId = await getActiveLedgerId();
+      return (await db.categories.where('ledger_id').equals(ledgerId).toArray()).filter(
         (c) => !c.parent_id && !c.is_hidden && c.kind === (type === 'income' ? 'income' : 'expense'),
-      ),
+      );
+    },
     [type],
   );
   const children = useLiveQuery(async () => {
@@ -111,7 +114,8 @@ export function QuickAdd({ onNeedAuth }: { onNeedAuth?: () => void }) {
     if (target) {
       setTimeout(() => {
         void (async () => {
-          const all = await db.categories.toArray();
+          const ledgerId = await getActiveLedgerId();
+          const all = await db.categories.where('ledger_id').equals(ledgerId).toArray();
           const hit = all.find((c) => !c.parent_id && c.name === target && !c.is_hidden);
           if (hit) setSelectedCat(hit.id);
         })();

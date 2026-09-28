@@ -19,7 +19,7 @@ export function PendingPage({ onBack }: { onBack: () => void }) {
     const rows = (await db.pending_transactions.toArray())
       .filter((p) => !p.is_deleted && p.ledger_id === ledgerId && p.status === 'pending')
       .sort((a, b) => b.created_at - a.created_at);
-    const allCats = await db.categories.toArray();
+    const allCats = await db.categories.where('ledger_id').equals(ledgerId).toArray();
     const accounts = (await db.accounts.toArray()).filter((a) => !a.is_archived);
     const txs = await db.transactions.toArray();
     return { rows, cats: allCats.filter((c) => c.kind === 'expense' && !c.is_hidden), accounts, txs };
