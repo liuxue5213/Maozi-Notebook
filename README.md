@@ -101,6 +101,11 @@ cd apps/mobile && pnpm start                # 需 Expo 开发环境/模拟器
 - **性能基线(本地实测,第 10 轮)**:dev 环境(PGlite 单进程,非生产口径):push 100 op 批次中位 ~600ms(每 op 独立事务),pull 500 行 ~62ms,空增量 ~24ms;生产 PG 数字待部署后回填
 - **生产配置清单**:`JWT_SECRET`(≥32 位且非默认,启动强校验)、`CORS_ORIGIN`(逗号分隔白名单,漏配拒绝跨域)、`DATABASE_URL`(标准 PG,禁用 PGlite 多副本);发布前 `pg_dump` 快照,详见 `.env.example`
 
+## 测试
+
+- 单元/集成:`pnpm test`(turbo 全仓;服务端集成 19 项含鉴权/同步/审计,Web 32 项含加密与求值)
+- 浏览器端到端:`pnpm --filter /web e2e`(Playwright + 系统 Chrome,自动拉起 API 临时库与 vite dev,跑「注册→记账→搜索→应用锁加密→登出重登」完整旅程;首次使用需 Chrome,或改 playwright.config 的 channel 并 `playwright install chromium`)
+
 ## 下一步(按 PRD 优先级)
 
 App 端模拟器端到端(SQLCipher 代码已就位,需真机/模拟器原生构建验证)→ OCR 记账(V2.0)→ 多币种(M01-F14)
