@@ -15,3 +15,8 @@ logs/
 output/
 .workbuddy/
 deliverables/
+
+# Playwright E2E 临时库与产物(第 11 轮)
+e2e-data/
+test-results/
+playwright-report/
