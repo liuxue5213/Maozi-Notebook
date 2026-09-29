@@ -94,7 +94,11 @@ export class SyncService {
     const table = TABLES[op.entity];
     if (!table) throw new AppError('sync.entity.400', 400, `未知实体类型: ${op.entity}`);
     const now = Date.now();
-    const existing: any = (await tx.select().from(table).where(eq(table.id, op.entityId)).limit(1))[0];
+    // FOR UPDATE(第 19+20 轮 P0-5):并发双改同一行时串行化读取 —— 后到事务阻塞至先到提交后
+    // 重读最新值再合并,消除「基于陈旧快照合并→UPDATE 整行覆盖掉对方已提交字段」的丢更新
+    const readExisting = async (): Promise<any> =>
+      (await tx.select().from(table).where(eq(table.id, op.entityId)).limit(1).for('update'))[0];
+    let existing: any = await readExisting();
     // 删除不存在的行:幂等 noop(#28,先于权限/载荷处理,防止毒丸)
     if (op.op === 'delete' && !existing) {
       return { entityId: op.entityId, status: 'noop' };
@@ -137,7 +141,16 @@ export class SyncService {
     // ---- 新建 ----
     if (!existing) {
       if (op.op === 'delete' || !payload) return { entityId: op.entityId, status: 'noop' }; // 删除/空载荷不存在行:幂等 noop(#28)
-      await tx.insert(table).values({ ...payload, id: op.entityId, client_version: op.clientVersion, server_version: nextSeq(), is_deleted: false, created_at: now, updated_at: now });
+      try {
+        await tx.insert(table).values({ ...payload, id: op.entityId, client_version: op.clientVersion, server_version: nextSeq(), is_deleted: false, created_at: now, updated_at: now });
+      } catch (e) {
+        // 并发同 id 插入(第 20 轮 P0-5②):唯一冲突(23505)时重读对方已提交的行转入合并路径,
+        // 而非裸抛 500(retryable)让客户端无限重试;其余错误原样上抛
+        if ((e as { code?: string }).code !== '23505') throw e;
+        existing = await readExisting();
+        if (!existing) throw e;
+        return await this.applyUpdate(tx, userId, op, existing, payload, table, nextSeq, now);
+      }
       if (op.entity === 'ledger') {
         // 新账本上行:自动补 owner 成员关系,使拉取范围立即覆盖
         await tx.insert(s.ledger_members).values({
@@ -159,9 +172,22 @@ export class SyncService {
 
     // ---- 更新 ----
     if (!payload) return { entityId: op.entityId, status: 'noop' };
+    return this.applyUpdate(tx, userId, op, existing, payload, table, nextSeq, now);
+  }
+
+  /** 更新/合并路径(正常更新与并发同 id 插入的 23505 回退共用);前置:existing 已 FOR UPDATE 锁定 */
+  private async applyUpdate(
+    tx: any,
+    userId: string,
+    op: ChangeOp,
+    existing: any,
+    payload: Record<string, unknown>,
+    table: any,
+    nextSeq: () => number,
+    now: number,
+  ): Promise<PushChangeResult> {
     // 幂等重放(网络重试/重复出队):载荷与现有行完全等效 → noop(PRD 5.4)。
-    // 并发安全由「载荷等效 + 字段级合并」共同保证:任何与现有行不一致的载荷一律走合并,
-    // 关键字段(MANUAL_FIELDS)冲突不裁决,绝不静默丢弃客户端修改(B4,有集成测试守护)。
+    // 并发安全由「行锁串行化 + 载荷等效 + 字段级合并」共同保证(B4 有集成测试守护)。
     if (!hasEffectiveChanges(existing, payload)) {
       return { entityId: op.entityId, status: 'noop' };
     }

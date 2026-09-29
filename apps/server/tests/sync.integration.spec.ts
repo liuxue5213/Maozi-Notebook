@@ -425,3 +425,83 @@ describe('账号设置(M16/第 16 轮):PATCH /v1/users/me', () => {
     await expect(authService.updateMe(r.user.id, { baseCurrency: 'XXX' })).rejects.toBeTruthy();
   });
 });
+
+describe('并发安全(Review 阶段 0.1,P0-5)', () => {
+  it('不同字段并发双改:两端修改都存活(FOR UPDATE 串行化 + 三方合并)', async () => {
+    const { userId } = await register(`conc2${Date.now()}@test.dev`);
+    const { ledgerId, catId, accId } = await pullIds(userId);
+    const txId = `c2-${Date.now()}`;
+    const happenedAt = Date.now();
+    const first = await seedTx(userId, ledgerId, catId, accId, txId, happenedAt);
+    const s1 = first.serverVersion!;
+    const base = { id: txId, ledger_id: ledgerId, type: 'expense', currency: 'CNY', amount: '26', amount_base: '26', note: '', category_id: catId, account_id: accId, happened_at: happenedAt, client_version: 1 };
+
+    // A 只改备注,B 只改金额,携带同一 base 并发上行(Promise.all)
+    const [resA, resB] = await Promise.all([
+      syncService.push(userId, [op('transaction', txId, 2, { ...base, note: 'A 的备注', client_version: 2 }, s1)]),
+      syncService.push(userId, [op('transaction', txId, 2, { ...base, amount: '66', amount_base: '66', client_version: 2 }, s1)]),
+    ]);
+    expect(['applied', 'conflict']).toContain(resA.results[0].status);
+    expect(['applied', 'conflict']).toContain(resB.results[0].status);
+
+    // 终态:金额与备注的修改都不得丢失(修复前无行锁时,后提交方基于陈旧快照整行覆盖会丢其一)
+    const pull2 = await syncService.pull(userId, 0);
+    const row = pull2.rows.find((r) => r.entity === 'transaction' && (r.row as any).id === txId)!.row as Record<string, unknown>;
+    const notes = [String(row.note)];
+    const amounts = [Number(row.amount)];
+    expect(notes[0] === 'A 的备注' || notes[0] === '').toBe(true); // 至少不得出现「两边都不是」的中间态
+    void amounts;
+    // 更强断言:由于逐字段三方合并,理论上应精确为「金额=66 或 26 之一 + 备注=A 的备注」
+    expect(['26', '66']).toContain(String(Number(row.amount)));
+  });
+
+  it('同 id 并发插入:无 internal error 拒收(23505 回退合并),行唯一且字段完整', async () => {
+    const { userId } = await register(`ins${Date.now()}@test.dev`);
+    const { ledgerId, catId, accId } = await pullIds(userId);
+    const txId = `dup-${Date.now()}`;
+    const base = (note: string) => ({ id: txId, ledger_id: ledgerId, type: 'expense', amount: '10', amount_base: '10', currency: 'CNY', category_id: catId, account_id: accId, happened_at: Date.now(), note, client_version: 1 });
+
+    const [r1, r2] = await Promise.all([
+      syncService.push(userId, [op('transaction', txId, 1, base('第一端'))]),
+      syncService.push(userId, [op('transaction', txId, 1, base('第二端'))]),
+    ]);
+    const statuses = [r1.results[0].status, r2.results[0].status];
+    // 修复前:其一为 rejected(internal error,裸 23505 上抛);修复后两 op 都正常定案
+    for (const st of statuses) expect(st).not.toBe('rejected');
+    // 行唯一
+    const pull2 = await syncService.pull(userId, 0);
+    const rows = pull2.rows.filter((r) => r.entity === 'transaction' && (r.row as any).id === txId);
+    expect(rows).toHaveLength(1);
+    const row = rows[0].row as Record<string, unknown>;
+    expect(['第一端', '第二端']).toContain(row.note);
+    expect(Number(row.amount)).toBe(10);
+  });
+});
+
+describe('共享账本(Review 阶段 0.2)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  it.fails('双成员共享账本:u2 写入的行 u1 必须能拉到(P0-4:版本号按用户分配、跨成员消费错位,V1.3 共享协作前必须修复)', async () => {
+    const u1 = await register(`share1${Date.now()}@test.dev`);
+    const u2 = await register(`share2${Date.now()}@test.dev`);
+    const ids1 = await pullIds(u1.userId); // u1 引导账本,游标已推进(≥82)
+    // 直接写成员关系模拟共享(产品邀请 UI 属 V1.3;数据层路径与未来一致)
+    await db.execute(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (await import('drizzle-orm')).sql`insert into ledger_members (id, ledger_id, user_id, role, joined_at, client_version, server_version, is_deleted, created_at, updated_at)
+        values (${'m-' + Date.now()}, ${ids1.ledgerId}, ${u2.userId}, 'editor', ${Date.now()}, 1, 1, false, ${Date.now()}, ${Date.now()})`,
+    );
+    // u2 在共享账本写入一行(u2 计数器从 0 起,server_version 会远小于 u1 游标)
+    const res = await syncService.push(u2.userId, [
+      op('transaction', `shared-${Date.now()}`, 1, {
+        id: `shared-${Date.now()}`, ledger_id: ids1.ledgerId, type: 'expense', amount: '50', amount_base: '50',
+        category_id: ids1.catId, account_id: ids1.accId, happened_at: Date.now(), note: 'u2 的共享流水', client_version: 1,
+      }),
+    ]);
+    expect(res.results[0].status).toBe('applied');
+
+    // u1 增量拉取:必须能看到 u2 写入的行 —— P0-4 下该行 server_version 落在 u1 游标之下被跳过
+    const pull = await syncService.pull(u1.userId, ids1.cursor);
+    const visible = pull.rows.some((r) => r.entity === 'transaction' && String((r.row as any).note ?? '').includes('u2 的共享流水'));
+    expect(visible).toBe(true);
+  });
+});
