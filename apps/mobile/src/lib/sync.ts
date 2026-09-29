@@ -11,8 +11,12 @@ async function transport(): Promise<SyncTransport> {
   return cachedTransport;
 }
 
-/** 关键字段冲突 → 生成「冲突副本」双版本并存(PRD 5.5) */
-async function onPushConflict(op: { payload: Record<string, unknown> }): Promise<void> {
+/** 关键字段冲突 → 生成「冲突副本」双版本并存(PRD 5.5);第 19 轮 P0-1:仅流水实体,其余不自动副本 */
+async function onPushConflict(op: { entity?: string; payload: Record<string, unknown> }, conflicts?: Array<{ field: string }>): Promise<void> {
+  if (op.entity !== 'transaction') {
+    console.warn('[sync] 关键字段冲突(非流水实体,不自动生成副本):', op.entity, conflicts);
+    return;
+  }
   const orig = op.payload as Partial<TransactionRow>;
   const now = Date.now();
   const copy: AnyRow = {

@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
     "start": "node dist/main.js",
     "dev": "pnpm run build && sh -c 'tsc -w -p tsconfig.json & node --watch dist/main.js'",
     "db:push": "drizzle-kit push",

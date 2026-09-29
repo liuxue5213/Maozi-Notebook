@@ -1,11 +1,12 @@
-import { isDue, newId, nextOccurrence, type RecurringRuleRow, type TransactionRow } from '@ledgerone/domain';
+import { isDue, nextOccurrence, type RecurringRuleRow, type TransactionRow } from '@ledgerone/domain';
 import { db } from './db/db';
 import { enqueue } from './sync/wiring';
 import { getBaseCurrency } from './sync/api';
 
 /**
  * 周期记账到期生成(M01-F06):扫描未暂停且到期的规则,逐期生成流水并推进 next_run_at。
- * 幂等性:流水用客户端 UUID + upsert,重复触发不会产生重复数据(PRD 5.2 recurring_rule 约束)。
+ * 幂等性(第 19 轮 P0-2 修复):流水 id 确定性派生 `rc_<规则id>_<到期时刻>`,重复触发
+ * (启动 + 手动 + 多标签页)只会覆盖同一行而非新增;流水与规则推进置于同一 Dexie 事务。
  * 补生成:规则落后多期时循环追平(guard 防死循环,最多追 400 期)。
  */
 export async function runDueRecurring(now = Date.now()): Promise<number> {
@@ -21,7 +22,7 @@ export async function runDueRecurring(now = Date.now()): Promise<number> {
       const type = cat?.kind === 'income' ? 'income' : 'expense';
       const at = cur.next_run_at;
       const t: TransactionRow = {
-        id: newId(),
+        id: `rc_${cur.id}_${at}`,
         ledger_id: cur.ledger_id,
         user_id: 'local',
         member_id: null,
@@ -48,18 +49,21 @@ export async function runDueRecurring(now = Date.now()): Promise<number> {
         created_at: Date.now(),
         updated_at: Date.now(),
       };
-      await db.transactions.put(t);
-      enqueue('transaction', t as unknown as Record<string, unknown>);
-      const nextAt = nextOccurrence(cur.frequency, cur.interval, cur.next_run_at);
-      cur = {
-        ...cur,
-        last_run_at: cur.next_run_at,
-        next_run_at: nextAt,
-        client_version: cur.client_version + 1,
-        updated_at: Date.now(),
-      };
-      await db.recurring_rules.put(cur);
-      enqueue('recurring_rule', cur as unknown as Record<string, unknown>);
+      // 同一 Dexie 事务:流水落库、规则推进与两次入队要么全部生效要么全部回滚(修复前两个 put 分离)
+      await db.transaction('rw', db.transactions, db.recurring_rules, db.outbox, async () => {
+        await db.transactions.put(t);
+        enqueue('transaction', t as unknown as Record<string, unknown>);
+        const nextAt = nextOccurrence(cur.frequency, cur.interval, cur.next_run_at);
+        cur = {
+          ...cur,
+          last_run_at: cur.next_run_at,
+          next_run_at: nextAt,
+          client_version: cur.client_version + 1,
+          updated_at: Date.now(),
+        };
+        await db.recurring_rules.put(cur);
+        enqueue('recurring_rule', cur as unknown as Record<string, unknown>);
+      });
       generated++;
       guard++;
     }

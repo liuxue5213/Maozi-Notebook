@@ -62,7 +62,13 @@ export const engine = new SyncEngine({
     },
   },
   onPushConflict: async (op, conflicts) => {
-    // PRD 5.5 双版本并存:客户端版本转存为「冲突副本」重新上行,服务端版本随后经 pull 落地
+    // PRD 5.5 双版本并存:客户端版本转存为「冲突副本」重新上行,服务端版本随后经 pull 落地。
+    // 第 19 轮 P0-1 修复:按 op.entity 分发 —— 修复前无条件写 transactions 表,非流水实体
+    // (recurring_rule/account 等含同名字段 amount/type)冲突时整行塞进流水表触发白屏。
+    if (op.entity !== 'transaction') {
+      console.warn('[sync] 关键字段冲突(非流水实体,保留本地待推送由用户手改,不自动生成副本):', op.entity, op.entityId, conflicts);
+      return;
+    }
     const orig = op.payload;
     const copy = {
       ...orig,

@@ -66,3 +66,27 @@ describe('周期记账(M01-F06)', () => {
     expect(isDue({ next_run_at: 1000, paused: true }, 2000)).toBe(false);
   });
 });
+
+describe('语音解析日期上下文(第 19 轮 P0-7,Review 实证缺陷)', () => {
+  it('日期数字不得被当金额:「2026年9月买咖啡26块」→ 26(修复前 2026)', () => {
+    expect(parseVoiceInput('2026年9月买咖啡26块').amount).toBe('26.00');
+  });
+
+  it('「9月15日打车花了38元」→ 38(修复前 9)', () => {
+    expect(parseVoiceInput('9月15日打车花了38元').amount).toBe('38.00');
+  });
+
+  it('「买HYA 5号电池花了9块」→ 9(修复前 5)', () => {
+    expect(parseVoiceInput('买HYA 5号电池花了9块').amount).toBe('9.00');
+  });
+
+  it('裸数字兜底取最后一个非日期数字:「9月15日打车花了38」→ 38', () => {
+    expect(parseVoiceInput('9月15日打车花了38').amount).toBe('38.00');
+  });
+
+  it('备注保留日期/型号数字,仅剔除金额词:「2026年9月买咖啡26块」note 含 2026年', () => {
+    const r = parseVoiceInput('2026年9月买咖啡26块');
+    expect(r.note).toContain('2026年');
+    expect(r.note).toBe('2026年9月买咖啡'); // 金额词 26块 已剔除,日期数字完整保留;注:not.toContain('26') 会误伤 '2026'
+  });
+});

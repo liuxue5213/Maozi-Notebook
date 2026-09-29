@@ -29,19 +29,41 @@ const CATEGORY_RULES: Array<[RegExp, string]> = [
 const INCOME_RE = /收到|收入|进账|到账|工资|奖金|报销|红包$|分红|利息/;
 
 /** 中文数字(简)与单位 */
-function parseAmountToken(text: string): string | null {
-  // 1) 阿拉伯数字 + 可选单位(块/元/毛/分)
-  const m = text.match(/(\d+(?:\.\d{1,2})?)\s*(?:块|元|块钱)?/);
-  if (m) {
-    const n = Number(m[1]);
-    if (n > 0 && Number.isFinite(n)) return n.toFixed(2);
+interface AmountHit {
+  value: string;
+  /** 命中的金额片段(从原文剔除后剩余作备注;日期/型号数字保留) */
+  token: string;
+}
+
+/**
+ * 金额识别(第 19 轮 P0-7 修复):
+ * 1) 显式货币单位(数字+块/元)优先 —— 金额语义最强;
+ * 2) 中文数字 + 单位(二十六块);
+ * 3) 兜底:取**最后一个**不处于日期上下文(后跟 年/月/日/号/点)的裸数字。
+ * 修复前取首个数字,「2026年9月买咖啡26块」→ 2026、「9月15日打车38元」→ 9(Review 实证)。
+ */
+function findAmount(text: string): AmountHit | null {
+  const unit = text.match(/(\d+(?:\.\d{1,2})?)\s*(?:块钱|块|元)/);
+  if (unit) {
+    const n = Number(unit[1]);
+    if (n > 0 && Number.isFinite(n)) return { value: n.toFixed(2), token: unit[0] };
   }
-  // 2) 纯中文数字:二十六 → 26;两块五 → 2.5
   const cn = text.match(/([零一二两三四五六七八九十百千]+)(?:块|元)(?:([零一二两三四五六七八九十]+))?/);
   if (cn) {
     const int = cnToInt(cn[1]);
-    const frac = cn[2] ? (cnToInt(cn[2]) ?? 0) : 0;
-    if (int !== null) return (int + frac / 10).toFixed(2);
+    if (int !== null) {
+      const frac = cn[2] ? (cnToInt(cn[2]) ?? 0) : 0;
+      return { value: (int + frac / 10).toFixed(2), token: cn[0] };
+    }
+  }
+  const bare = [...text.matchAll(/\d+(?:\.\d{1,2})?/g)].filter((m) => {
+    const next = text[m.index! + m[0].length] ?? '';
+    return !/[年月日号点]/.test(next);
+  });
+  const last = bare[bare.length - 1];
+  if (last) {
+    const n = Number(last[0]);
+    if (n > 0 && Number.isFinite(n)) return { value: n.toFixed(2), token: last[0] };
   }
   return null;
 }
@@ -68,17 +90,16 @@ function cnToInt(s: string): number | null {
 
 export function parseVoiceInput(text: string): VoiceParseResult {
   const t = text.trim();
-  const amount = parseAmountToken(t);
+  const hit = findAmount(t);
   const isIncome = INCOME_RE.test(t);
   const cat = CATEGORY_RULES.find(([re]) => re.test(t));
-  // 去掉金额片段,剩余文本作备注
-  const note = t
-    .replace(/(\d+(?:\.\d{1,2})?)\s*(?:块|元|块钱)?/g, '')
+  // 只剔除金额片段本身(日期/型号数字保留在备注里;修复前全量剔数字导致「年月买咖啡」)
+  const note = (hit ? t.replace(hit.token, '') : t)
     .replace(/[零一二两三四五六七八九十百千]+(?:块|元)[零一二两三四五六七八九十]+?/g, '')
     .replace(/\s+/g, ' ')
     .trim();
   return {
-    amount,
+    amount: hit?.value ?? null,
     isIncome,
     categoryKeyword: cat?.[1] ?? null,
     note,
