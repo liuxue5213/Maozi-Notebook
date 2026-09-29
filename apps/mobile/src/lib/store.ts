@@ -75,8 +75,9 @@ export async function getActiveLedgerId(): Promise<string> {
   return ((await metaGet(db, 'active_ledger')) as string) ?? '';
 }
 
-export async function saveTx(row: AnyRow): Promise<void> {
-  await saveLocal(db, 'transaction', row);
+export async function saveTx(row: AnyRow, base?: AnyRow | null): Promise<void> {
+  // base = 编辑时所见的行快照:三方合并(第 13 轮协议)公共祖先;新增流水无 base(走 LWW 路径)
+  await saveLocal(db, 'transaction', row, { base: base ?? null });
 }
 
 export async function listRecent(limit = 50): Promise<AnyRow[]> {

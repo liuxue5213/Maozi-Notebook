@@ -51,7 +51,8 @@ CREATE TABLE IF NOT EXISTS outbox (
   payload TEXT NOT NULL,
   client_version INTEGER NOT NULL,
   occurred_at INTEGER NOT NULL,
-  device_id TEXT
+  device_id TEXT,
+  base TEXT
 );
 -- 服务端 rejected 的变更死信隔离(上线前全检 B5/N1:与 apps/web Dexie deadletter 表同构)
 CREATE TABLE IF NOT EXISTS deadletter (

@@ -143,3 +143,36 @@ describe('SyncEngine 全链路(真实 SQL)', () => {
     expect(engine.getSnapshot().state).toBe('idle');
   });
 });
+
+describe('三方合并 base 快照(第 18 轮,移动端协议对齐)', () => {
+  it('saveLocal 携 base → take 反解 ChangeOp.base;无 base → null(向后兼容)', async () => {
+    const { db } = makeDb();
+    await initSchema(db);
+    const tx = sampleTx('t-base') as never;
+    const baseRow = sampleTx('t-base', { amount: '20.00', note: '编辑前' }) as never;
+    await saveLocal(db, 'transaction', tx, { base: baseRow, deviceId: 'm1' });
+    const fresh = sampleTx('t-nobase') as never;
+    await saveLocal(db, 'transaction', fresh, { deviceId: 'm1' });
+
+    const q = createChangeQueue(db);
+    const ops = await q.take(10);
+    const withBase = ops.find((o) => o.entityId === 't-base');
+    const withoutBase = ops.find((o) => o.entityId === 't-nobase');
+    expect(withBase?.base).toMatchObject({ amount: '20.00', note: '编辑前' });
+    expect(withoutBase?.base ?? null).toBeNull();
+  });
+
+  it('旧库无 base 列 → initSchema 幂等 ALTER 补列后可用', async () => {
+    const { db } = makeDb();
+    await initSchema(db);
+    // 模拟旧库:重建无 base 列的 outbox
+    db.execAsync('DROP TABLE outbox');
+    db.execAsync(`CREATE TABLE outbox (seq INTEGER PRIMARY KEY AUTOINCREMENT, entity TEXT NOT NULL, entity_id TEXT NOT NULL,
+      op TEXT NOT NULL, payload TEXT NOT NULL, client_version INTEGER NOT NULL, occurred_at INTEGER NOT NULL, device_id TEXT)`);
+    await initSchema(db); // 幂等 ALTER 补 base 列,不抛错
+    const tx = sampleTx('t-old') as never;
+    await saveLocal(db, 'transaction', tx, { base: sampleTx('t-old', { note: 'old-base' }) as never });
+    const ops = await createChangeQueue(db).take(5);
+    expect(ops.find((o) => o.entityId === 't-old')?.base).toMatchObject({ note: 'old-base' });
+  });
+});

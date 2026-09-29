@@ -10,6 +10,12 @@ export type { SQLiteLike, AnyRow } from './types';
 
 export async function initSchema(db: SQLiteLike): Promise<void> {
   await db.execAsync(initSchemaSql());
+  // 旧库幂等迁移(第 18 轮):outbox.base 列(三方合并编辑基线快照);列已存在时静默忽略
+  try {
+    await db.execAsync('ALTER TABLE outbox ADD COLUMN base TEXT');
+  } catch {
+    /* column already exists */
+  }
 }
 
 export async function metaGet(db: SQLiteLike, key: string): Promise<unknown> {
@@ -34,11 +40,11 @@ export async function saveLocal(
   db: SQLiteLike,
   entity: EntityKind,
   row: AnyRow,
-  opts: { op?: 'upsert' | 'delete'; deviceId?: string } = {},
+  opts: { op?: 'upsert' | 'delete'; deviceId?: string; base?: AnyRow | null } = {},
 ): Promise<void> {
   const { sql, params } = upsertSql(entity, row);
   await db.runAsync(sql, params);
-  await enqueueChange(db, entity, row, opts.op ?? 'upsert', opts.deviceId);
+  await enqueueChange(db, entity, row, opts.op ?? 'upsert', opts.deviceId, opts.base);
 }
 
 export async function enqueueChange(
@@ -47,19 +53,21 @@ export async function enqueueChange(
   row: AnyRow,
   op: 'upsert' | 'delete',
   deviceId?: string,
+  base?: AnyRow | null,
 ): Promise<void> {
   await db.runAsync(
-    'INSERT INTO outbox (entity, entity_id, op, payload, client_version, occurred_at, device_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [entity, String(row.id), op, JSON.stringify(row), Number(row.client_version ?? 1), Date.now(), deviceId ?? ''],
+    'INSERT INTO outbox (entity, entity_id, op, payload, client_version, occurred_at, device_id, base) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [entity, String(row.id), op, JSON.stringify(row), Number(row.client_version ?? 1), Date.now(), deviceId ?? '', base ? JSON.stringify(base) : null],
   );
 }
 
-/** 变更队列(SyncEngine.ChangeQueue):FIFO take / ack / count */export function createChangeQueue(db: SQLiteLike) {
+/** 变更队列(SyncEngine.ChangeQueue):FIFO take / ack / count */
+export function createChangeQueue(db: SQLiteLike) {
   return {
     async take(limit: number): Promise<ChangeOp[]> {
       const rows = await db.getAllAsync<{
         seq: number; entity: string; entity_id: string; op: string; payload: string;
-        client_version: number; occurred_at: number; device_id: string;
+        client_version: number; occurred_at: number; device_id: string; base: string | null;
       }>('SELECT * FROM outbox ORDER BY seq LIMIT ?', [limit]);
       return rows.map((r) => ({
         seq: r.seq,
@@ -68,6 +76,7 @@ export async function enqueueChange(
         op: r.op as 'upsert' | 'delete',
         payload: JSON.parse(r.payload) as Record<string, unknown>,
         clientVersion: r.client_version,
+        base: r.base ? (JSON.parse(r.base) as Record<string, unknown>) : null,
         occurredAt: r.occurred_at,
         deviceId: r.device_id ?? '',
       }));
