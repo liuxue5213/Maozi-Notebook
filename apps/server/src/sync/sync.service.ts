@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { and, eq, gt, inArray } from 'drizzle-orm';
+import { and, eq, gt, inArray, sql, type SQL } from 'drizzle-orm';
 import { hasEffectiveChanges, mergeServerRow, mergeThreeWay } from '@ledgerone/sync';
 import {
   newId, sanitizeEntityPayload,
@@ -55,40 +55,40 @@ export class SyncService {
     const results: PushChangeResult[] = [];
     // 同批 403 按原因去重留痕:防止单批 500 op 刷量膨胀 audit_logs(第 6 轮审查)
     const auditedForbidden = new Set<string>();
-    for (const op of ops) {
-      try {
-        const res = await db.transaction(async (tx) => {
-          // P0-4 ②:先取全局写锁,使「预留顺序 == 提交顺序」,消除并发下后提交的小序号行被游标跳过
-          await lockGlobalWrite(tx);
-          // 每个 op 预留序号池:行本身 + 派生成员行 + sync_change,游标允许空洞
-          let seqCursor = await reserveSeq(tx, 16);
-          const nextSeq = () => seqCursor++;
-          return this.applyOne(tx, userId, op, nextSeq);
-        });
-        results.push(res);
-      } catch (e) {
-        // 任何错误(含 403 越权)都只拒收该 op 并附带原因,绝不阻塞队列;
-        // 响应不含服务端数据,攻击者得不到任何回显(B3/B5)。
-        if (e instanceof AppError && e.status === 403) {
-          // 越权尝试留痕(上线全检审计待办):跨账本「搬家」/无权限写入是灰度期重点监控对象
-          const dedupeKey = `${e.code}:${e.message}`;
-          if (!auditedForbidden.has(dedupeKey)) {
-            auditedForbidden.add(dedupeKey);
-            logAudit({
-              actorUserId: userId,
-              action: 'sync.forbidden.403',
-              target: `${op.entity}:${op.entityId.slice(0, 8)}…`,
-              summary: { message: e.message },
-            });
+    // P1-17(第 25 轮):整批单事务 —— 修复前每 op 独立 BEGIN/COMMIT(500 op = 500 次事务)
+    // 且各 op 重复更新同一 users 行;现整批一次写锁 + 一次序号预留,op 级失败用 SAVEPOINT 回退,
+    // 「坏 op 不堵队头」语义不变,事务开销从 O(ops) 降为 O(1)。
+    await db.transaction(async (tx) => {
+      await lockGlobalWrite(tx);
+      let seqCursor = await reserveSeq(tx, ops.length * 16);
+      const nextSeq = () => seqCursor++;
+      for (const op of ops) {
+        try {
+          // SAVEPOINT:单 op 失败只回退自身,已成功 op 的写入保留到外层提交
+          await tx.transaction(async (sp: any) => {
+            results.push(await this.applyOne(sp, userId, op, nextSeq));
+          });
+        } catch (e) {
+          if (e instanceof AppError && e.status === 403) {
+            const dedupeKey = `${e.code}:${e.message}`;
+            if (!auditedForbidden.has(dedupeKey)) {
+              auditedForbidden.add(dedupeKey);
+              logAudit({
+                actorUserId: userId,
+                action: 'sync.forbidden.403',
+                target: `${op.entity}:${op.entityId.slice(0, 8)}…`,
+                summary: { message: e.message },
+              });
+            }
           }
+          results.push({
+            entityId: op.entityId,
+            status: 'rejected',
+            reason: e instanceof AppError ? `${e.code} ${e.message}`.slice(0, 200) : 'internal error',
+          });
         }
-        results.push({
-          entityId: op.entityId,
-          status: 'rejected',
-          reason: e instanceof AppError ? `${e.code} ${e.message}`.slice(0, 200) : 'internal error',
-        });
       }
-    }
+    });
     return { results };
   }
 
@@ -229,40 +229,62 @@ export class SyncService {
           .filter((r: any) => !r.is_deleted)
           .map((r: any) => r.ledger_id);
 
-        const rows: PullRow[] = [];
-        const push = (kind: EntityKind, arr: any[]) => rows.push(...arr.map((row) => ({ entity: kind, row })));
-
-        if (myLedgerIds.length) {
-          for (const cfg of PULL_CONFIG) {
-            const t = cfg.table;
-            const conds = [gt(t.server_version, cursor)];
-            if (cfg.kind === 'ledger') conds.push(inArray(t.id, myLedgerIds));
-            else if (cfg.kind === 'ledger_member') conds.push(eq(t.user_id, userId));
-            else conds.push(inArray(t.ledger_id, myLedgerIds));
-            const part = await tx.select().from(t).where(and(...conds)).orderBy(t.server_version).limit(limit + 1);
-            push(cfg.kind, part);
-          }
-          const att = await tx
-            .select({ row: s.attachments })
-            .from(s.attachments)
-            .innerJoin(s.transactions, eq(s.attachments.transaction_id, s.transactions.id))
-            .where(and(gt(s.attachments.server_version, cursor), inArray(s.transactions.ledger_id, myLedgerIds)))
-            .orderBy(s.attachments.server_version)
-            .limit(limit + 1);
-          push('attachment', att.map((r: any) => r.row));
-          const items = await tx
-            .select({ row: s.budget_items })
-            .from(s.budget_items)
-            .innerJoin(s.budgets, eq(s.budget_items.budget_id, s.budgets.id))
-            .where(and(gt(s.budget_items.server_version, cursor), inArray(s.budgets.ledger_id, myLedgerIds)))
-            .orderBy(s.budget_items.server_version)
-            .limit(limit + 1);
-          push('budget_item', items.map((r: any) => r.row));
+        if (!myLedgerIds.length) {
+          return { cursor, hasMore: false, rows: [] };
         }
 
-        rows.sort((a, b) => (Number(a.row.server_version) || 0) - (Number(b.row.server_version) || 0));
-        const hasMore = rows.length > limit;
-        const page = rows.slice(0, limit);
+        // P1-18(第 25 轮):键集两阶段 —— 修复前 13 个数据源各取 limit+1 行(约 6500 行)JS 排序
+        // 截断到 500,过度读取 ~13 倍;现在第一段仅取 (entity, id, server_version) 键集
+        // (UNION ALL 单查询精确 LIMIT limit+1),第二段按实体批量取完整行,过度读取归零。
+        const ledgers = sql.join(myLedgerIds.map((id: string) => sql`${id}`), sql`, `);
+        const parts: SQL[] = PULL_CONFIG.map((cfg) => {
+          const scope =
+            cfg.kind === 'ledger'
+              ? sql`l.id in (${ledgers})`
+              : cfg.kind === 'ledger_member'
+                ? sql`l.user_id = ${userId}`
+                : sql`l.ledger_id in (${ledgers})`;
+          return sql`select ${cfg.kind}::text as entity, l.id::text as id, l.server_version as sv from ${cfg.table} l where l.server_version > ${cursor} and ${scope}`;
+        });
+        // attachments/budget_items 经父表归属账本(与 PULL_CONFIG 之后的联表口径一致)
+        parts.push(sql`select 'attachment'::text as entity, a.id::text as id, a.server_version as sv from ${s.attachments} a join ${s.transactions} t on t.id = a.transaction_id where a.server_version > ${cursor} and t.ledger_id in (${ledgers})`);
+        parts.push(sql`select 'budget_item'::text as entity, bi.id::text as id, bi.server_version as sv from ${s.budget_items} bi join ${s.budgets} b on b.id = bi.budget_id where bi.server_version > ${cursor} and b.ledger_id in (${ledgers})`);
+        const keys = (
+          await tx.execute(sql`${sql.join(parts, sql` union all `)} order by sv limit ${limit + 1}`)
+        ).rows as Array<{ entity: string; id: string; sv: string | number }>;
+
+        // 第二段:按实体批量取完整行(仅取键集命中的行,读取量 = 实际页面大小)
+        const byEntity = new Map<EntityKind, string[]>();
+        for (const k of keys) {
+          const list = byEntity.get(k.entity as EntityKind) ?? [];
+          list.push(k.id);
+          byEntity.set(k.entity as EntityKind, list);
+        }
+        const rowById = new Map<string, PullRow>();
+        for (const [entity, ids] of byEntity) {
+          const t = PULL_CONFIG.find((c) => c.kind === entity)!.table;
+          const rows = await tx.select().from(t).where(inArray(t.id, ids));
+          for (const row of rows) rowById.set(`${entity}:${row.id}`, { entity, row });
+        }
+        // attachments/budget_items 联表取行(键集已含归属过滤,按 id 直取)
+        const attIds = byEntity.get('attachment') ?? [];
+        if (attIds.length) {
+          const rows = await tx.select().from(s.attachments).where(inArray(s.attachments.id, attIds));
+          for (const row of rows) rowById.set(`attachment:${row.id}`, { entity: 'attachment', row });
+        }
+        const itemIds = byEntity.get('budget_item') ?? [];
+        if (itemIds.length) {
+          const rows = await tx.select().from(s.budget_items).where(inArray(s.budget_items.id, itemIds));
+          for (const row of rows) rowById.set(`budget_item:${row.id}`, { entity: 'budget_item', row });
+        }
+
+        // 键集已按 sv 全序排列(全局单序号无并列),按序组装页面
+        const page: PullRow[] = [];
+        for (const k of keys.slice(0, limit)) {
+          const row = rowById.get(`${k.entity}:${k.id}`);
+          if (row) page.push(row);
+        }
+        const hasMore = keys.length > limit;
         // 空页保持游标不动:head 与旧游标之间仍可能有并发提交的行,跳头会永久漏发
         const newCursor = page.length ? Number(page[page.length - 1].row.server_version ?? cursor) : cursor;
         return { cursor: newCursor, hasMore, rows: page };

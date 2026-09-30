@@ -38,7 +38,7 @@ export const ledgers = pgTable('ledgers', {
   icon: text('icon'),
   sort: integer('sort').notNull().default(0),
   ...syncCols,
-});
+}, (t) => [index('ledger_lv_idx').on(t.server_version)]);
 
 export const ledger_members = pgTable(
   'ledger_members',
@@ -51,7 +51,7 @@ export const ledger_members = pgTable(
     joined_at: timeMs('joined_at').notNull(),
     ...syncCols,
   },
-  (t) => [uniqueIndex('member_ledger_user_uq').on(t.ledger_id, t.user_id)],
+  (t) => [uniqueIndex('member_ledger_user_uq').on(t.ledger_id, t.user_id), index('member_user_idx').on(t.user_id, t.is_deleted)],
 );
 
 export const accounts = pgTable(
@@ -73,7 +73,7 @@ export const accounts = pgTable(
     balance_cached: numeric('balance_cached', { precision: 18, scale: 4 }),
     ...syncCols,
   },
-  (t) => [index('account_ledger_idx').on(t.ledger_id)],
+  (t) => [index('account_ledger_idx').on(t.ledger_id), index('account_lv_idx').on(t.ledger_id, t.server_version)],
 );
 
 export const categories = pgTable(
@@ -91,7 +91,7 @@ export const categories = pgTable(
     is_preset: boolean('is_preset').notNull().default(false),
     ...syncCols,
   },
-  (t) => [index('category_ledger_idx').on(t.ledger_id)],
+  (t) => [index('category_ledger_idx').on(t.ledger_id), index('category_lv_idx').on(t.ledger_id, t.server_version)],
 );
 
 export const tags = pgTable(
@@ -103,7 +103,7 @@ export const tags = pgTable(
     color: text('color'),
     ...syncCols,
   },
-  (t) => [index('tag_ledger_idx').on(t.ledger_id)],
+  (t) => [index('tag_ledger_idx').on(t.ledger_id), index('tag_lv_idx').on(t.ledger_id, t.server_version)],
 );
 
 export const transactions = pgTable(
@@ -137,6 +137,7 @@ export const transactions = pgTable(
     index('tx_ledger_happened_idx').on(t.ledger_id, t.happened_at),
     index('tx_category_happened_idx').on(t.category_id, t.happened_at),
     index('tx_account_idx').on(t.account_id),
+    index('tx_lv_idx').on(t.ledger_id, t.server_version),
   ],
 );
 
@@ -161,7 +162,7 @@ export const budgets = pgTable(
     rollover: boolean('rollover').notNull().default(false),
     ...syncCols,
   },
-  (t) => [index('budget_ledger_idx').on(t.ledger_id)],
+  (t) => [index('budget_ledger_idx').on(t.ledger_id), index('budget_lv_idx').on(t.ledger_id, t.server_version)],
 );
 
 export const budget_items = pgTable(
@@ -193,7 +194,7 @@ export const recurring_rules = pgTable(
     last_run_at: timeMs('last_run_at'),
     ...syncCols,
   },
-  (t) => [index('recurring_ledger_idx').on(t.ledger_id)],
+  (t) => [index('recurring_ledger_idx').on(t.ledger_id), index('recurring_lv_idx').on(t.ledger_id, t.server_version)],
 );
 
 export const attachments = pgTable(
@@ -227,7 +228,7 @@ export const pending_transactions = pgTable(
   },
   (t) => [
     uniqueIndex('pending_dedupe_uq').on(t.ledger_id, t.dedupe_hash),
-    index('pending_ledger_idx').on(t.ledger_id),
+    index('pending_ledger_idx').on(t.ledger_id), index('pending_lv_idx').on(t.ledger_id, t.server_version),
   ],
 );
 
@@ -244,7 +245,7 @@ export const debts = pgTable(
     transaction_id: text('transaction_id'),
     ...syncCols,
   },
-  (t) => [index('debt_ledger_idx').on(t.ledger_id)],
+  (t) => [index('debt_ledger_idx').on(t.ledger_id), index('debt_lv_idx').on(t.ledger_id, t.server_version)],
 );
 
 export const reimbursements = pgTable(
@@ -258,7 +259,7 @@ export const reimbursements = pgTable(
     transaction_ids: jsonb('transaction_ids').notNull().default([]),
     ...syncCols,
   },
-  (t) => [index('reimbursement_ledger_idx').on(t.ledger_id)],
+  (t) => [index('reimbursement_ledger_idx').on(t.ledger_id), index('reimbursement_lv_idx').on(t.ledger_id, t.server_version)],
 );
 
 /** 同步变更日志(PRD 5.1 sync_change):增量同步与冲突排查 */

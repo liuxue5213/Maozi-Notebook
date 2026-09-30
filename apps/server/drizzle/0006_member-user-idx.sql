@@ -1,0 +1,1 @@
+CREATE INDEX "member_user_idx" ON "ledger_members" USING btree ("user_id","is_deleted");
