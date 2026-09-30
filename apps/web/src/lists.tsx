@@ -4,6 +4,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { addAmount, formatAmount, subAmount, type CategoryRow, type TransactionRow } from '@ledgerone/domain';
 import { db } from './db/db';
 import { enqueue } from './sync/wiring';
+import { loadTxWindow, TX_DISPLAY_CAP } from './utils/tx-list';
 import { TxEditor } from './txedit';
 import { CalendarView } from './calendar';
 
@@ -83,28 +84,7 @@ function activeFilterCount(f: TxFilter): number {
   return (['keyword', 'min', 'max', 'categoryId', 'accountId', 'from', 'to'] as const).filter((k) => f[k] !== '').length;
 }
 
-function applyFilter(rows: TransactionRow[], f: TxFilter, catMap: Map<string, CategoryRow>): TransactionRow[] {
-  const fromTs = f.from ? new Date(`${f.from}T00:00:00`).getTime() : null;
-  const toTs = f.to ? new Date(`${f.to}T00:00:00`).getTime() + 86_400_000 : null;
-  return rows.filter((r) => {
-    if (f.keyword) {
-      const cat = r.category_id ? catMap.get(r.category_id)?.name ?? '' : '';
-      const hay = `${r.note ?? ''} ${cat}`;
-      if (!hay.includes(f.keyword.trim())) return false;
-    }
-    const amt = Number(r.amount);
-    if (f.min !== '' && amt < Number(f.min)) return false;
-    if (f.max !== '' && amt > Number(f.max)) return false;
-    if (f.categoryId) {
-      const c = r.category_id ? catMap.get(r.category_id) : undefined;
-      if (!c || (c.id !== f.categoryId && c.parent_id !== f.categoryId)) return false;
-    }
-    if (f.accountId && r.account_id !== f.accountId && r.to_account_id !== f.accountId) return false;
-    if (fromTs !== null && r.happened_at < fromTs) return false;
-    if (toTs !== null && r.happened_at >= toTs) return false;
-    return true;
-  });
-}
+// 逐字段筛选语义已下沉 utils/tx-list.loadTxWindow(P0-3:全量过滤 + 渲染截断),此处不再保留内存版副本
 
 function FilterPanel({ filter, onChange, cats, accounts }: {
   filter: TxFilter;
@@ -176,8 +156,9 @@ export function TransactionList() {
     const accounts = await db.accounts.toArray();
     const catMap = new Map(cats.map((c) => [c.id, c]));
     const accMap = new Map(accounts.map((a) => [a.id, a]));
-    const all = (await db.transactions.orderBy('happened_at').reverse().limit(300).toArray()).filter((r) => !r.is_deleted);
-    const rows = activeFilterCount(filter) > 0 ? applyFilter(all, filter, catMap) : all;
+    // P0-3 修复:全量过滤(日期下推索引)+ 仅渲染截断(见 utils/tx-list),不再先 limit(300) 再筛
+    const window = await loadTxWindow(db.transactions, filter, catMap);
+    const rows = window.rows;
     const groups = new Map<number, DayGroup>();
     for (const r of rows) {
       const key = dayStart(r.happened_at);
@@ -197,9 +178,9 @@ export function TransactionList() {
       const d = r as TxDecorated;
       d._cat = catMap.get(r.category_id ?? '') ?? undefined;
       d._acc = accMap.get(r.account_id);
-      g.rows.push(r);
+      g.rows.push(d);
     }
-    return { groups: [...groups.values()], catMap, accounts, matched: rows.length, total: all.length };
+    return { groups: [...groups.values()], catMap, accounts, ...window };
   }, [filter]);
 
   const recycled = useLiveQuery(
@@ -241,7 +222,7 @@ export function TransactionList() {
           </button>
         )}
         {view === 'active' && filterCount > 0 && activeData && (
-          <span className="muted small" style={{ alignSelf: 'center' }}>{activeData.matched}/{activeData.total} 条</span>
+          <span className="muted small" style={{ alignSelf: 'center' }}>{activeData.matchedTotal}/{activeData.totalActive} 条</span>
         )}
       </div>
 
@@ -249,6 +230,12 @@ export function TransactionList() {
 
       {view === 'active' && filterOpen && activeData && (
         <FilterPanel filter={filter} onChange={setFilter} cats={activeData.catMap ? [...activeData.catMap.values()] : []} accounts={activeData.accounts} />
+      )}
+
+      {view === 'active' && activeData?.truncated && (
+        <div className="banner" role="status">
+          已显示最近 {TX_DISPLAY_CAP} 条(共 {activeData.matchedTotal} 条命中),更早的请用日期/关键词缩小范围
+        </div>
       )}
 
       {view === 'active' && (
