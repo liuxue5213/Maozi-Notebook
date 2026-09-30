@@ -9,7 +9,7 @@ import { db } from '../db/db';
 import * as s from '../db/schema';
 import { AppError } from '../common/errors';
 import { logAudit } from '../common/audit';
-import { bootstrapIfNeeded, reserveSeq } from '../db/bootstrap';
+import { bootstrapIfNeeded, lockGlobalWrite, reserveSeq } from '../db/bootstrap';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -58,8 +58,10 @@ export class SyncService {
     for (const op of ops) {
       try {
         const res = await db.transaction(async (tx) => {
+          // P0-4 ②:先取全局写锁,使「预留顺序 == 提交顺序」,消除并发下后提交的小序号行被游标跳过
+          await lockGlobalWrite(tx);
           // 每个 op 预留序号池:行本身 + 派生成员行 + sync_change,游标允许空洞
-          let seqCursor = await reserveSeq(tx, userId, 16);
+          let seqCursor = await reserveSeq(tx, 16);
           const nextSeq = () => seqCursor++;
           return this.applyOne(tx, userId, op, nextSeq);
         });

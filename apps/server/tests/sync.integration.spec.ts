@@ -36,6 +36,9 @@ beforeAll(async () => {
   const { SyncService } = await import('../src/sync/sync.service');
   authService = new AuthService();
   syncService = new SyncService();
+  // P0-4:全局序号初始化(生产由 main.ts 调用;测试手工建库,需显式初始化)
+  const { ensureGlobalSeq } = await import('../src/db/bootstrap');
+  await ensureGlobalSeq();
 }, 60000);
 
 async function register(email: string) {
@@ -480,7 +483,7 @@ describe('并发安全(Review 阶段 0.1,P0-5)', () => {
 
 describe('共享账本(Review 阶段 0.2)', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  it.fails('双成员共享账本:u2 写入的行 u1 必须能拉到(P0-4:版本号按用户分配、跨成员消费错位,V1.3 共享协作前必须修复)', async () => {
+  it('双成员共享账本:u2 写入的行 u1 必须能拉到(P0-4 已修:全局单序号替代按用户分配)', async () => {
     const u1 = await register(`share1${Date.now()}@test.dev`);
     const u2 = await register(`share2${Date.now()}@test.dev`);
     const ids1 = await pullIds(u1.userId); // u1 引导账本,游标已推进(≥82)
@@ -499,9 +502,30 @@ describe('共享账本(Review 阶段 0.2)', () => {
     ]);
     expect(res.results[0].status).toBe('applied');
 
-    // u1 增量拉取:必须能看到 u2 写入的行 —— P0-4 下该行 server_version 落在 u1 游标之下被跳过
+    // u1 增量拉取:必须能看到 u2 写入的行 —— P0-4 修复前该行 server_version 落在 u1 游标之下被跳过
     const pull = await syncService.pull(u1.userId, ids1.cursor);
     const visible = pull.rows.some((r) => r.entity === 'transaction' && String((r.row as any).note ?? '').includes('u2 的共享流水'));
     expect(visible).toBe(true);
+  });
+
+  it('跨用户序号单调递增:后写入者的行号必须大于先写入者已推进的游标(P0-4 根因)', async () => {
+    const a = await register(`seqa${Date.now()}@test.dev`);
+    const b = await register(`seqb${Date.now()}@test.dev`);
+    const ida = await pullIds(a.userId);
+    const idb = await pullIds(b.userId);
+
+    // a 先写并推进游标
+    await seedTx(a.userId, ida.ledgerId, ida.catId, ida.accId, `seq-a-${Date.now()}`);
+    const after = await syncService.pull(a.userId, ida.cursor);
+    expect(after.rows.length).toBeGreaterThan(0);
+
+    // b 后写:b 的行号必须严格大于 a 当前游标,否则对共享账本成员不可见
+    const bTxId = `seq-b-${Date.now()}`;
+    await seedTx(b.userId, idb.ledgerId, idb.catId, idb.accId, bTxId);
+    const rows = await db.execute(
+      (await import('drizzle-orm')).sql`select server_version from transactions where id = ${bTxId}`,
+    );
+    const bVersion = Number((rows.rows[0] as { server_version: number }).server_version);
+    expect(bVersion).toBeGreaterThan(after.cursor);
   });
 });

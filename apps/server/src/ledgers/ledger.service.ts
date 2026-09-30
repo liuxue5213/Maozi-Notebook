@@ -3,7 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { db } from '../db/db';
 import * as s from '../db/schema';
 import { AppError } from '../common/errors';
-import { reserveSeq, seedDefaultLedger } from '../db/bootstrap';
+import { lockGlobalWrite, reserveSeq, seedDefaultLedger } from '../db/bootstrap';
 
 @Injectable()
 export class LedgerService {
@@ -30,18 +30,26 @@ export class LedgerService {
 
   async rename(userId: string, id: string, name: string) {
     await this.assertOwner(userId, id);
-    const seq = await db.transaction((tx) => reserveSeq(tx, userId, 1));
-    await db.update(s.ledgers).set({ name, server_version: seq, updated_at: Date.now() }).where(eq(s.ledgers.id, id));
+    // P1-15 修复:预留序号与行更新必须在同一事务内(原实现先提交 reserve 再在事务外 update,
+    // 中途失败会留下「序号已消耗但行未更新」的不一致)
+    await db.transaction(async (tx) => {
+      await lockGlobalWrite(tx);
+      const seq = await reserveSeq(tx, 1);
+      await tx.update(s.ledgers).set({ name, server_version: seq, updated_at: Date.now() }).where(eq(s.ledgers.id, id));
+    });
     return { id, name };
   }
 
   async remove(userId: string, id: string) {
     await this.assertOwner(userId, id);
-    const seq = await db.transaction((tx) => reserveSeq(tx, userId, 1));
-    await db
-      .update(s.ledgers)
-      .set({ is_deleted: true, deleted_at: Date.now(), server_version: seq, updated_at: Date.now() })
-      .where(eq(s.ledgers.id, id));
+    await db.transaction(async (tx) => {
+      await lockGlobalWrite(tx);
+      const seq = await reserveSeq(tx, 1);
+      await tx
+        .update(s.ledgers)
+        .set({ is_deleted: true, deleted_at: Date.now(), server_version: seq, updated_at: Date.now() })
+        .where(eq(s.ledgers.id, id));
+    });
     return { id, deleted: true };
   }
 

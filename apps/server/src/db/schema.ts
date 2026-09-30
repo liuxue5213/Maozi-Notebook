@@ -329,3 +329,20 @@ export const phone_codes = pgTable('phone_codes', {
   used: boolean('used').notNull().default(false),
   created_at: timeMs('created_at').notNull(),
 });
+
+/**
+ * 全局同步序号(P0-4 修复)。
+ *
+ * 原实现:`server_version` 由「每用户一行计数器」`users.version_seq` 分配,
+ * 而 pull 用**单一游标**跨共享账本成员消费所有成员写入的行 —— 两个成员的计数器彼此独立,
+ * 后加入成员的行号必然小于先加入者已推进的游标,导致**其数据永不下发**(第 20 轮 it.fails 固化)。
+ *
+ * 改为单行全局计数器后,所有行共享同一单调命名空间,单游标即可正确消费;
+ * `PullResponse` 协议不变,三端零改造。
+ */
+export const sync_seq = pgTable('sync_seq', {
+  /** 固定单值 'global':单行表,作为全库唯一的序号源 */
+  id: text('id').primaryKey(),
+  /** 已分配到的最大序号;reserveSeq 以 `seq = seq + n` 原子递增 */
+  seq: bigint('seq', { mode: 'number' }).notNull().default(0),
+});

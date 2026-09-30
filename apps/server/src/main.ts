@@ -6,6 +6,7 @@ import { AppModule } from './app.module';
 import { env } from './env';
 import { purgeRecycleBin, purgeAuditLogs } from './purge';
 import { runMigrations, closeDb } from './db/db';
+import { ensureGlobalSeq } from './db/bootstrap';
 
 /** CORS 白名单:生产必须由 CORS_ORIGIN 显式配置(逗号分隔),开发态放行本地前端 */
 function corsOrigin(): string[] | boolean {
@@ -19,8 +20,12 @@ async function main(): Promise<void> {
   // 启动即迁移(幂等):dev/存量库漏跑迁移会让新列缺失、fire-and-forget 写入静默失败
   try {
     await runMigrations();
+    // P0-4:全局同步序号初始化(幂等)。初值取现有最大 server_version + 1,
+    // 保证从「按用户分配」迁移到「全局单序号」后,新写入的行号严格大于任何已同步游标。
+    const seq = await ensureGlobalSeq();
+    console.log(`[ledgerone] 全局同步序号已就绪: ${seq}`);
   } catch (e) {
-    console.error('[ledgerone] 迁移执行失败,拒绝启动:', e);
+    console.error('[ledgerone] 迁移/序号初始化失败,拒绝启动:', e);
     process.exit(1);
   }
   const app = await NestFactory.create(AppModule);
