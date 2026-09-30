@@ -53,3 +53,27 @@ describe('账户余额推导', () => {
     expect(isLiability('cash')).toBe(false);
   });
 });
+
+describe('净值与软删账户(P1-5,第 24 轮)', () => {
+  it('软删账户不计入净值(域层兜底,调用方漏过滤时)', () => {
+    const acc = (id: string, over: Partial<AccountRow> = {}): AccountRow => ({
+      id, ledger_id: 'l1', name: id, type: 'debit_card', initial_balance: '0', initial_date: 1,
+      currency: 'CNY', include_in_net: true, is_archived: false, sort: 0,
+      credit_bill_day: null, credit_due_day: null, credit_limit: null, balance_cached: null,
+      client_version: 1, server_version: null, is_deleted: false, deleted_at: null,
+      created_at: 1, updated_at: 1, ...over,
+    });
+    const tx = (id: string, amt: string): TransactionRow => ({
+      id, ledger_id: 'l1', user_id: 'u', member_id: null, type: 'expense', amount: amt,
+      currency: 'CNY', amount_base: amt, exchange_rate: null, category_id: null,
+      account_id: 'a1', to_account_id: null, happened_at: 1, note: '', is_refunded: false,
+      refund_of_id: null, reimburse_status: null, exclude_from_budget: false,
+      attachment_count: 0, source: 'manual', client_version: 1, server_version: null,
+      is_deleted: false, deleted_at: null, created_at: 1, updated_at: 1,
+    });
+    const active = acc('a1', { initial_balance: '100' });
+    const deleted = acc('a2', { initial_balance: '500', is_deleted: true });
+    const s = computeNetWorth([active, deleted], [tx('t1', '30')]);
+    expect(s.assets).toBe('70'); // 100-30;软删 a2 的 500 不计入(修复会计入 → 570)
+  });
+});

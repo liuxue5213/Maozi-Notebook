@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { addAmount, formatAmount, subAmount, type CategoryRow, type TransactionRow } from '@ledgerone/domain';
 import { db } from './db/db';
+import { getActiveLedgerId } from './db/seed';
 import { enqueue } from './sync/wiring';
 import { loadTxWindow, TX_DISPLAY_CAP } from './utils/tx-list';
 import { TxEditor } from './txedit';
@@ -26,7 +27,8 @@ export function TodayCard() {
     const now = Date.now();
     const ds = dayStart(now);
     const ms = monthStart(now);
-    const rows = (await db.transactions.where('happened_at').aboveOrEqual(ms).toArray()).filter((r) => !r.is_deleted);
+    const ledgerId = await getActiveLedgerId(); // P1-4:今日卡按当前账本作用域
+    const rows = (await db.transactions.where('happened_at').aboveOrEqual(ms).toArray()).filter((r) => !r.is_deleted && r.ledger_id === ledgerId);
     const sum = (pred: (r: TransactionRow) => boolean) =>
       rows.filter(pred).reduce((acc, r) => addAmount(acc, r.amount_base), '0');
     return {
@@ -157,7 +159,8 @@ export function TransactionList() {
     const catMap = new Map(cats.map((c) => [c.id, c]));
     const accMap = new Map(accounts.map((a) => [a.id, a]));
     // P0-3 修复:全量过滤(日期下推索引)+ 仅渲染截断(见 utils/tx-list),不再先 limit(300) 再筛
-    const window = await loadTxWindow(db.transactions, filter, catMap);
+    // P1-4:明细按当前账本作用域,多账本数据不互串
+    const window = await loadTxWindow(db.transactions, filter, catMap, TX_DISPLAY_CAP, await getActiveLedgerId());
     const rows = window.rows;
     const groups = new Map<number, DayGroup>();
     for (const r of rows) {

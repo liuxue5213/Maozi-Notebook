@@ -104,9 +104,10 @@ export function ExportPage({ onBack }: { onBack: () => void }) {
   const model = useLiveQuery(async () => {
     const ledgerId = await getActiveLedgerId();
     const ledger = await db.ledgers.get(ledgerId);
-    const txs = (await db.transactions.toArray()).filter((t) => !t.is_deleted);
-    const cats = await db.categories.toArray();
-    const accounts = await db.accounts.toArray();
+    // P1-4:导出内容与文件名的账本一致(修复前文件名是当前账本、内容含其它账本);P1-5:软删账户不计净值
+    const txs = (await db.transactions.where('ledger_id').equals(ledgerId).toArray()).filter((t) => !t.is_deleted);
+    const cats = await db.categories.where('ledger_id').equals(ledgerId).toArray();
+    const accounts = (await db.accounts.where('ledger_id').equals(ledgerId).toArray()).filter((a) => !a.is_deleted);
     const summary = computeNetWorth(accounts, txs);
     const times = txs.map((t) => t.happened_at);
     const months: string[] = [];

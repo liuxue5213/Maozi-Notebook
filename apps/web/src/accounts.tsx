@@ -20,8 +20,12 @@ export function AccountsPage({ onBack }: { onBack: () => void }) {
   const [creating, setCreating] = useState(false);
 
   const model = useLiveQuery(async () => {
-    const accounts = (await db.accounts.toArray()).sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name));
-    const txs = await db.transactions.toArray();
+    // P1-4:账户/余额按当前账本作用域;P1-5:软删账户不显示且不计入净值
+    const ledgerId = await getActiveLedgerId();
+    const accounts = (await db.accounts.where('ledger_id').equals(ledgerId).toArray())
+      .filter((a) => !a.is_deleted)
+      .sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name));
+    const txs = (await db.transactions.where('ledger_id').equals(ledgerId).toArray());
     const now = new Date();
     // 信用卡本期账单(M02-F05):周期消费 − 周期内还款(转入)
     const credits = accounts

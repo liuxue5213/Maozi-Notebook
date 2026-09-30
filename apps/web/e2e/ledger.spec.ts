@@ -18,6 +18,20 @@ function pullLedgersRaw(page: Page): Promise<Array<{ id: string; name: string; i
   }, API) as Promise<Array<{ id: string; name: string; is_deleted: boolean }>>;
 }
 
+/** 级联墓碑核验(P1-3):被删账本名下的账户/分类在服务端同样 is_deleted=true */
+function pullCascadeState(page: Page, ledgerName: string): Promise<{ accounts: number; cats: number }> {
+  return page.evaluate(async (ledgerName) => {
+    const token = localStorage.getItem('lo_access')!;
+    const pull = await (await fetch('http://localhost:60505/v1/sync/pull?cursor=0&limit=1000', { headers: { Authorization: `Bearer ${token}` } })).json();
+    const ledgers = pull.rows.filter((r: { entity: string }) => r.entity === 'ledger').map((r: { row: { id: string; name: string } }) => r.row);
+    const target = ledgers.find((l: { name: string }) => l.name === ledgerName);
+    if (!target) return { accounts: -1, cats: -1 };
+    const accounts = pull.rows.filter((r: { entity: string; row: { ledger_id: string; is_deleted: boolean } }) => r.entity === 'account' && r.row.ledger_id === target.id && r.row.is_deleted).length;
+    const cats = pull.rows.filter((r: { entity: string; row: { ledger_id: string; is_deleted: boolean } }) => r.entity === 'category' && r.row.ledger_id === target.id && r.row.is_deleted).length;
+    return { accounts, cats };
+  }, ledgerName) as Promise<{ accounts: number; cats: number }>;
+}
+
 test('多账本:新建/切换/归属校验/级联删除', async ({ page }) => {
   test.setTimeout(120_000);
   await page.goto('/');
@@ -74,4 +88,12 @@ test('多账本:新建/切换/归属校验/级联删除', async ({ page }) => {
       { timeout: 20_000, intervals: [1000, 2000] },
     )
     .toBe('tombstoned');
+
+  // ---- 级联墓碑(P1-3):出差账本名下账户(≥2 预置)与分类(78 预置)在服务端同样软删 ----
+  await expect
+    .poll(async () => (await pullCascadeState(page, '出差账本')).accounts, { timeout: 20_000, intervals: [1000, 2000] })
+    .toBeGreaterThanOrEqual(2);
+  await expect
+    .poll(async () => (await pullCascadeState(page, '出差账本')).cats, { timeout: 20_000, intervals: [1000, 2000] })
+    .toBeGreaterThanOrEqual(78);
 });

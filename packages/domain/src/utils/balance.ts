@@ -42,7 +42,8 @@ export function computeNetWorth(accounts: AccountRow[], txs: TransactionRow[]): 
   for (const a of accounts) {
     const b = accountBalance(a.initial_balance, a.id, txs);
     balances.set(a.id, b);
-    if (a.is_archived || !a.include_in_net) continue;
+    // P1-5(Review):软删账户不计入净值 —— 调用方漏过滤时兜底(与 Web 端显式过滤双保险)
+    if (a.is_archived || a.is_deleted || !a.include_in_net) continue;
     if (isLiability(a.type)) liabilitiesRaw = addAmount(liabilitiesRaw, b);
     else assets = addAmount(assets, b);
   }

@@ -13,14 +13,22 @@ test('明细大数据量:限外老流水可搜到 + 截断提示 + 计数不失�
   await expect(page.locator('.sync-badge')).toContainText(/已同步|已登录/, { timeout: 20_000 });
 
   // 批量落 550 行(倒序铺 550 天,note 补零防子串误命中)
+  // P1-4 作用域后明细只看当前账本:造数必须挂在真实 active ledger 与其账户上
   const seeded = await page.evaluate(async () => {
-    const db = (window as unknown as { __ledgerone: { db: { transactions: { bulkPut(rows: unknown[]): Promise<unknown>; count(): Promise<number> } } } }).__ledgerone.db;
+    const db = (window as unknown as { __ledgerone: { db: {
+      transactions: { bulkPut(rows: unknown[]): Promise<unknown>; count(): Promise<number> };
+      ledgers: { toArray(): Promise<Array<{ id: string }>> };
+      accounts: { toArray(): Promise<Array<{ id: string; ledger_id: string }>> };
+      meta: { get(k: string): Promise<{ value: unknown } | undefined> };
+    } } }).__ledgerone.db;
+    const activeLedger = ((await db.meta.get('active_ledger'))?.value as string | undefined) ?? (await db.ledgers.toArray())[0]?.id;
+    const accId = (await db.accounts.toArray()).find((a) => a.ledger_id === activeLedger)?.id ?? '';
     const BASE = Date.now() - 550 * 86_400_000;
     const rows = Array.from({ length: 550 }, (_, i) => ({
       id: `bulk-${String(i).padStart(4, '0')}`,
-      ledger_id: 'seed-ledger', user_id: 'local', member_id: null, type: 'expense',
+      ledger_id: activeLedger, user_id: 'local', member_id: null, type: 'expense',
       amount: '1.00', currency: 'CNY', amount_base: '1.00', exchange_rate: null,
-      category_id: null, account_id: 'seed-acc', to_account_id: null,
+      category_id: null, account_id: accId, to_account_id: null,
       happened_at: BASE + i * 86_400_000, note: `bulk-${String(i).padStart(4, '0')}`,
       is_refunded: false, refund_of_id: null, reimburse_status: null, exclude_from_budget: false,
       attachment_count: 0, source: 'manual', client_version: 1, server_version: null,

@@ -50,39 +50,45 @@ export function LedgerPanel({ onBack }: { onBack: () => void }) {
     }
     if (!window.confirm(`删除「${l.name}」?其流水/分类/账户将一并进入回收站(30 天后清除),不可撤销。`)) return;
     const now = Date.now();
-    // 级联软删:账本 + 名下流水/分类/账户/预算,全部入回收站并下行墓碑
+    // 级联软删(P1-3 修复,Review):账本 + 名下流水/分类/账户/预算/预算项/周期规则/待确认池,
+    // 全部本地软删并**统一以 delete op 上行**—— 修复前 accounts/categories/budgets 用 upsert
+    // 携墓碑载荷,服务端 !existing 分支会以 is_deleted:false 落库「复活」无主脏行;
+    // delete op 对已存在行写墓碑、对不存在行幂等 noop,语义唯一。
     const mark = <T extends { client_version: number; is_deleted: boolean; deleted_at?: number | null }>(r: T): T => ({
       ...r,
       is_deleted: true,
       deleted_at: now,
       client_version: r.client_version + 1,
     });
-    const [txs, accs, cats, budgets] = await Promise.all([
+    const [txs, accs, cats, budgets, budgetItems, rules, pendings] = await Promise.all([
       db.transactions.where('ledger_id').equals(l.id).toArray(),
       db.accounts.where('ledger_id').equals(l.id).toArray(),
       db.categories.where('ledger_id').equals(l.id).toArray(),
       db.budgets.where('ledger_id').equals(l.id).toArray(),
+      db.budget_items.toArray(),
+      db.recurring_rules.where('ledger_id').equals(l.id).toArray(),
+      db.pending_transactions.where('ledger_id').equals(l.id).toArray(),
     ]);
-    for (const t of txs) {
-      const row = mark(t);
-      await db.transactions.put(row);
-      enqueue('transaction', row as unknown as Record<string, unknown>, 'delete');
-    }
-    for (const a of accs) {
-      const row = mark(a);
-      await db.accounts.put(row);
-      enqueue('account', row as unknown as Record<string, unknown>);
-    }
-    for (const c of cats) {
-      const row = mark(c);
-      await db.categories.put(row);
-      enqueue('category', row as unknown as Record<string, unknown>);
-    }
-    for (const b of budgets) {
-      const row = mark(b);
-      await db.budgets.put(row);
-      enqueue('budget', row as unknown as Record<string, unknown>);
-    }
+    const budgetIds = new Set(budgets.map((b) => b.id));
+    const items = budgetItems.filter((i) => budgetIds.has(i.budget_id)); // 预算项经 budget 归属账本
+    const purge = async (
+      table: { put: (row: never) => Promise<unknown> },
+      rows: Array<{ client_version: number; is_deleted: boolean; deleted_at?: number | null }>,
+      entity: 'transaction' | 'account' | 'category' | 'budget' | 'budget_item' | 'recurring_rule' | 'pending_transaction',
+    ): Promise<void> => {
+      for (const r of rows) {
+        const row = mark(r);
+        await table.put(row as never);
+        enqueue(entity, row as unknown as Record<string, unknown>, 'delete');
+      }
+    };
+    await purge(db.transactions, txs, 'transaction');
+    await purge(db.accounts, accs, 'account');
+    await purge(db.categories, cats, 'category');
+    await purge(db.budgets, budgets, 'budget');
+    await purge(db.budget_items, items, 'budget_item');
+    await purge(db.recurring_rules, rules, 'recurring_rule');
+    await purge(db.pending_transactions, pendings, 'pending_transaction');
     const ledgerTomb = mark(l);
     await db.ledgers.put(ledgerTomb);
     enqueue('ledger', ledgerTomb as unknown as Record<string, unknown>, 'delete');

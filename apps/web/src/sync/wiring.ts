@@ -108,6 +108,10 @@ export function scheduleSync(delayMs = 2000): void {
 }
 
 async function wipeLocal(): Promise<void> {
+  // P1-21(Review):保留 local_seeded —— 清库后若丢此标记,下次刷新 ensureLocalSeed 会
+  // 再播种一个新「我的账本」并上行到**当前(新)账号**,成为幽灵账本。换号场景服务端
+  // 数据随 pull 到位,不需要本地再播种;本地播种标记应跨清库存活。
+  const seeded = (await db.meta.get('local_seeded'))?.value;
   await Promise.all([
     db.ledgers.clear(), db.members.clear(), db.accounts.clear(), db.categories.clear(),
     db.tags.clear(), db.transactions.clear(), db.budgets.clear(), db.budget_items.clear(),
@@ -115,6 +119,7 @@ async function wipeLocal(): Promise<void> {
     db.debts.clear(), db.reimbursements.clear(), db.outbox.clear(), db.meta.clear(),
   ]);
   await db.meta.put({ key: 'sync_cursor', value: 0 });
+  if (seeded) await db.meta.put({ key: 'local_seeded', value: seeded });
 }
 
 /** 登录后:换账号清空本地;空库时清掉本地播种,直接以服务端全量为准 */

@@ -37,6 +37,8 @@ export async function loadTxWindow(
   filter: TxFilterInput,
   catMap: Map<string, CategoryRow>,
   cap = TX_DISPLAY_CAP,
+  /** 账本作用域(P1-4):多账本下明细只看当前账本;缺省不过滤(兼容) */
+  ledgerId?: string,
 ): Promise<TxWindowResult> {
   const fromTs = filter.from ? new Date(`${filter.from}T00:00:00`).getTime() : null;
   const toTs = filter.to ? new Date(`${filter.to}T00:00:00`).getTime() + 86_400_000 : null;
@@ -51,6 +53,7 @@ export async function loadTxWindow(
       : table.orderBy('happened_at').reverse();
   await scan.each((r) => {
     if (r.is_deleted) return;
+    if (ledgerId && r.ledger_id !== ledgerId) return; // 账本作用域(P1-4):跨账本数据不串入
     totalActive++;
     if (kw) {
       const cat = r.category_id ? catMap.get(r.category_id)?.name ?? '' : '';

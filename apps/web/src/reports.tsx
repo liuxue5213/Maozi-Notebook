@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { addAmount, cmpAmount, forecastMonthEnd, formatAmount, subAmount, type CategoryRow, type TransactionRow } from '@ledgerone/domain';
 import { db } from './db/db';
+import { getActiveLedgerId } from './db/seed';
 import { type PeriodKind, periodRange, trendBuckets } from './utils/period';
 
 const PERIODS: Array<{ key: PeriodKind; label: string }> = [
@@ -27,9 +28,10 @@ export function Reports() {
   const model = useLiveQuery(
     async () => {
       const { start, end } = periodRange(period);
+      const ledgerId = await getActiveLedgerId(); // P1-4:报表按当前账本作用域
       const rows = (await db.transactions.where('happened_at').between(start, end, true, false).toArray())
-        .filter((r) => !r.is_deleted && r.type !== 'transfer');
-      const cats = await db.categories.toArray();
+        .filter((r) => !r.is_deleted && r.type !== 'transfer' && r.ledger_id === ledgerId);
+      const cats = (await db.categories.where('ledger_id').equals(ledgerId).toArray());
       const catMap = new Map(cats.map((c) => [c.id, c]));
       let income = '0';
       let expense = '0';

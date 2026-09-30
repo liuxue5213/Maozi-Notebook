@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { addAmount, formatAmount, type CategoryRow, type TransactionRow } from '@ledgerone/domain';
 import { db } from './db/db';
+import { getActiveLedgerId } from './db/seed';
 import { TxEditor } from './txedit';
 
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日'];
@@ -31,9 +32,10 @@ export function CalendarView() {
       d.setMonth(d.getMonth() + 1);
       return d.getTime();
     })();
+    const ledgerId = await getActiveLedgerId(); // P1-4:日历按当前账本作用域
     const rows = (await db.transactions.where('happened_at').between(start, end, true, false).toArray())
-      .filter((r) => !r.is_deleted && r.type !== 'transfer');
-    const cats = await db.categories.toArray();
+      .filter((r) => !r.is_deleted && r.type !== 'transfer' && r.ledger_id === ledgerId);
+    const cats = (await db.categories.where('ledger_id').equals(ledgerId).toArray());
     const accounts = await db.accounts.toArray();
     const catMap = new Map(cats.map((c) => [c.id, c]));
     const accMap = new Map(accounts.map((a) => [a.id, a]));
