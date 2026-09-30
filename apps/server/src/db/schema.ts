@@ -331,6 +331,19 @@ export const phone_codes = pgTable('phone_codes', {
 });
 
 /**
+ * 邮箱密码登录按账号失败锁定(P1-11,Review):与验证码锁定(F-06)同语义 ——
+ * 5 次失败锁 15 分钟。全局限流按 IP,挡不住针对单一账号的多 IP 分布式撞库。
+ */
+export const login_locks = pgTable('login_locks', {
+  /** 归一化邮箱(小写)作主键 */
+  email: text('email').primaryKey(),
+  /** 连续失败次数(成功登录即删行清零) */
+  attempts: integer('attempts').notNull().default(0),
+  locked_until: timeMs('locked_until').notNull().default(0),
+  updated_at: timeMs('updated_at').notNull(),
+});
+
+/**
  * 全局同步序号(P0-4 修复)。
  *
  * 原实现:`server_version` 由「每用户一行计数器」`users.version_seq` 分配,

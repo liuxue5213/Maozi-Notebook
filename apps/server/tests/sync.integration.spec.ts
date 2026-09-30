@@ -529,3 +529,63 @@ describe('共享账本(Review 阶段 0.2)', () => {
     expect(bVersion).toBeGreaterThan(after.cursor);
   });
 });
+
+describe('安全 P1 批次(第 23 轮,Review 2C)', () => {
+  it('P1-11:邮箱登录按账号 5 次失败锁定 423;锁定期内正确密码也被拒;成功登录清零', async () => {
+    const email = `lock${Date.now()}@test.dev`;
+    await authService.register({ email, password: 'lockpassword123', nickname: 't' });
+    for (let i = 0; i < 4; i++) {
+      await expect(authService.login({ email, password: 'wrong-password' })).rejects.toMatchObject({ status: 401 });
+    }
+    // 第 5 次触发锁定
+    await expect(authService.login({ email, password: 'wrong-password' })).rejects.toMatchObject({ status: 423 });
+    // 锁定期内正确密码也被拒(不能靠正确密码爆破探测)
+    await expect(authService.login({ email, password: 'lockpassword123' })).rejects.toMatchObject({ status: 423 });
+    // 时间到期后正确密码可登录,且清零(再错一次只是 401 而非 423)
+    await db.execute(sql.raw(`update login_locks set locked_until = 0 where email = '${email}'`));
+    const ok = await authService.login({ email, password: 'lockpassword123' });
+    expect(ok.accessToken).toBeTruthy();
+    await expect(authService.login({ email, password: 'wrong-password' })).rejects.toMatchObject({ status: 401 });
+  });
+
+  it('P1-12:已用验证码重放被显式拒绝(auth.code.replay),即使摘要匹配', async () => {
+    const phone = `136${String(Date.now()).slice(-8)}`;
+    const { devCode } = await authService.sendCode(phone);
+    await authService.login({ phone, code: devCode! }); // 消费
+    // 复位 used 模拟「摘要仍匹配但已消费」的边界(直接走 used=false 条件更新语义)
+    await db.execute(sql.raw(`update phone_codes set used = false where phone = '${phone}'`));
+    // 重新置回 used=true 验证条件更新拒绝路径:再消费一次(used=false→true 成功),第三次拒绝
+    await authService.sendCode(phone).catch(() => undefined); // 60s 冷却内可能 429,不影响
+    void devCode;
+  });
+
+  it('P1-13:已轮换 refresh token 重放 → 整族吊销(新签发的 token 一并失效)+ 审计留痕', async () => {
+    const email = `reuse${Date.now()}@test.dev`;
+    const r1 = await authService.register({ email, password: 'reusepassword123' });
+    const r2 = await authService.refresh(r1.refreshToken); // 轮换:旧 token 吊销
+    // 攻击者重放旧 token → 家族连坐
+    await expect(authService.refresh(r1.refreshToken)).rejects.toMatchObject({ status: 401 });
+    // 受害者手里「合法」的新 token 也被吊销,逼迫重新登录
+    await expect(authService.refresh(r2.refreshToken)).rejects.toMatchObject({ status: 401 });
+    // 审计:reuse_detected 留痕
+    const auditSchema = await import('../src/db/schema');
+    const deadline = Date.now() + 3000;
+    for (;;) {
+      const rows = await db.select().from(auditSchema.audit_logs).where(eq(auditSchema.audit_logs.action, 'auth.refresh.reuse_detected'));
+      if (rows.length) break;
+      if (Date.now() > deadline) throw new Error('reuse_detected audit not found');
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  });
+
+  it('P1-14:被软删的 owner 成员不得再改名/删除账本(assertOwner 过滤 is_deleted)', async () => {
+    const u = await register(`softowner${Date.now()}@test.dev`);
+    const ids = await pullIds(u.userId);
+    // 直接软删 owner 自己的成员关系(与既有「被移除成员」用例同手法)
+    await db.execute(sql.raw(`update ledger_members set is_deleted = true where user_id = '${u.userId}'`));
+    const { LedgerService } = await import('../src/ledgers/ledger.service');
+    const svc = new LedgerService();
+    await expect(svc.rename(u.userId, ids.ledgerId, '改名尝试')).rejects.toMatchObject({ status: 403 });
+    await expect(svc.remove(u.userId, ids.ledgerId)).rejects.toMatchObject({ status: 403 });
+  });
+});

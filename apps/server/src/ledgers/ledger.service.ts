@@ -58,7 +58,7 @@ export class LedgerService {
       await db
         .select({ role: s.ledger_members.role })
         .from(s.ledger_members)
-        .where(and(eq(s.ledger_members.ledger_id, ledgerId), eq(s.ledger_members.user_id, userId)))
+        .where(and(eq(s.ledger_members.ledger_id, ledgerId), eq(s.ledger_members.user_id, userId), eq(s.ledger_members.is_deleted, false)))
         .limit(1)
     )[0];
     if (m?.role !== 'owner') throw new AppError('ledger.owner.403', 403, '仅账本所有者可执行该操作');

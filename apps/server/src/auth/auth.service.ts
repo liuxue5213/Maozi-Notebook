@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull } from 'drizzle-orm';
+import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import { Injectable } from '@nestjs/common';
 import { randomBytes, randomInt, createHmac, timingSafeEqual } from 'node:crypto';
 import { newId, SUPPORTED_CURRENCIES } from '@ledgerone/domain';
@@ -15,6 +15,8 @@ const CODE_TTL_MS = 10 * 60_000;
 const CODE_RESEND_COOLDOWN_MS = 60_000; // F-07:60s 冷却
 const CODE_MAX_ATTEMPTS = 5; // F-06:连续失败 5 次锁定
 const CODE_LOCK_MS = 15 * 60_000; // F-06:锁定 15 分钟(锁定期内禁止校验与重发)
+const LOGIN_MAX_ATTEMPTS = 5; // P1-11:邮箱登录按账号 5 次失败锁定(同 F-06 语义)
+const LOGIN_LOCK_MS = 15 * 60_000;
 
 export interface TokenPair {
   accessToken: string;
@@ -80,13 +82,45 @@ export class AuthService {
 
   async login(input: { email?: string; password?: string; phone?: string; code?: string }): Promise<TokenPair> {
     if (input.email && input.password) {
-      const u = (
-        await db.select().from(s.users).where(eq(s.users.email, input.email.trim().toLowerCase())).limit(1)
-      )[0];
+      const email = input.email.trim().toLowerCase();
+      // P1-11:按账号失败锁定(全局限流按 IP,挡不住多 IP 针对单账号撞库)
+      const now = Date.now();
+      const lock = (await db.select().from(s.login_locks).where(eq(s.login_locks.email, email)).limit(1))[0];
+      if (lock && Number(lock.locked_until) > now) {
+        logAudit({ action: 'auth.login.locked', target: maskEmail(email), summary: { phase: 'refused' } });
+        throw new AppError('auth.login.423', 423, `尝试次数过多,请 ${Math.ceil((Number(lock.locked_until) - now) / 60_000)} 分钟后再试`);
+      }
+      const u = (await db.select().from(s.users).where(eq(s.users.email, email)).limit(1))[0];
       if (!u?.password_hash || !(await verifyPassword(input.password, u.password_hash))) {
-        logAudit({ action: 'auth.login.failed', target: maskEmail(input.email.trim().toLowerCase()), summary: { reason: 'bad_credentials' } });
+        // 原子自增失败计数,达阈值写锁定(与 F-06 验证码同语义)
+        const t = Date.now();
+        const rows = await db
+          .update(s.login_locks)
+          .set({
+            attempts: sql`${s.login_locks.attempts} + 1`,
+            locked_until: sql`CASE WHEN ${s.login_locks.attempts} + 1 >= ${LOGIN_MAX_ATTEMPTS} THEN ${t + LOGIN_LOCK_MS} ELSE ${s.login_locks.locked_until} END`,
+            updated_at: t,
+          })
+          .where(eq(s.login_locks.email, email))
+          .returning({ attempts: s.login_locks.attempts, locked_until: s.login_locks.locked_until });
+        const cur =
+          rows[0] ??
+          (
+            await db
+              .insert(s.login_locks)
+              .values({ email, attempts: 1, locked_until: 0, updated_at: t })
+              .onConflictDoUpdate({ target: s.login_locks.email, set: { attempts: 1, updated_at: t } })
+              .returning({ attempts: s.login_locks.attempts, locked_until: s.login_locks.locked_until })
+          )[0];
+        logAudit({ action: 'auth.login.failed', target: maskEmail(email), summary: { reason: 'bad_credentials', attempts: cur?.attempts ?? 1 } });
+        if (Number(cur?.locked_until ?? 0) > t) {
+          logAudit({ action: 'auth.login.locked', target: maskEmail(email), summary: { phase: 'lock_created', attempts: cur?.attempts } });
+          throw new AppError('auth.login.423', 423, '尝试次数过多,请 15 分钟后再试');
+        }
         throw new AppError('auth.login.401', 401, '邮箱或密码错误');
       }
+      // 成功登录:清失败计数
+      await db.delete(s.login_locks).where(eq(s.login_locks.email, email));
       return this.issue(u.id);
     }
     if (input.phone && input.code) {
@@ -104,12 +138,17 @@ export class AuthService {
       const got = Buffer.from(rec.code_hash, 'hex');
       const ok = expect.length === got.length && timingSafeEqual(expect, got);
       if (!ok || rec.used || now > Number(rec.expires_at)) {
-        const attempts = rec.attempts + 1;
-        const lock = attempts >= CODE_MAX_ATTEMPTS ? now + CODE_LOCK_MS : Number(rec.locked_until);
-        await db
+        // P1-12:失败计数改为单条原子 UPDATE 自增(修复前 JS 读-改-写,并发可绕过 5 次锁定)
+        const rows = await db
           .update(s.phone_codes)
-          .set({ attempts, locked_until: lock })
-          .where(eq(s.phone_codes.phone, input.phone));
+          .set({
+            attempts: sql`${s.phone_codes.attempts} + 1`,
+            locked_until: sql`CASE WHEN ${s.phone_codes.attempts} + 1 >= ${CODE_MAX_ATTEMPTS} THEN ${now + CODE_LOCK_MS} ELSE ${s.phone_codes.locked_until} END`,
+          })
+          .where(eq(s.phone_codes.phone, input.phone))
+          .returning({ attempts: s.phone_codes.attempts, locked_until: s.phone_codes.locked_until });
+        const attempts = rows[0]?.attempts ?? rec.attempts + 1;
+        const lock = Number(rows[0]?.locked_until ?? rec.locked_until);
         logAudit({ action: 'auth.code.verify_failed', target: maskPhone(input.phone), summary: { attempts } });
         if (lock > now) {
           logAudit({ action: 'auth.code.locked', target: maskPhone(input.phone), summary: { phase: 'lock_created', attempts } });
@@ -117,11 +156,16 @@ export class AuthService {
         }
         throw new AppError('auth.code.401', 401, '验证码错误或已过期');
       }
-      // 校验成功:清零失败计数与锁定,并一次性消费
-      await db
+      // 校验成功:一次性消费(P1-12:条件更新 used=false → 已用即拒绝,并发重放只有一方成功)
+      const consumed = await db
         .update(s.phone_codes)
         .set({ used: true, attempts: 0, locked_until: 0 })
-        .where(eq(s.phone_codes.phone, input.phone));
+        .where(and(eq(s.phone_codes.phone, input.phone), eq(s.phone_codes.used, false)))
+        .returning({ phone: s.phone_codes.phone });
+      if (!consumed.length) {
+        logAudit({ action: 'auth.code.replay', target: maskPhone(input.phone) });
+        throw new AppError('auth.code.401', 401, '验证码已使用');
+      }
       let u = (await db.select().from(s.users).where(eq(s.users.phone, input.phone)).limit(1))[0];
       if (!u) {
         const id = newId();
@@ -136,6 +180,8 @@ export class AuthService {
 
   async refresh(refreshToken: string): Promise<TokenPair> {
     const hash = sha256Hex(refreshToken);
+    // P1-13:先查吊销/过期外的有效行;查不到时再看「该 token 是否存在但已被吊销」——
+    // 已轮换 token 的重放是盗用强信号 → 吊销该用户全部会话(token 家族连坐),逼迫重新登录
     const row = (
       await db
         .select()
@@ -144,11 +190,32 @@ export class AuthService {
         .limit(1)
     )[0];
     if (!row) {
-      logAudit({ action: 'auth.refresh.failed', target: 'invalid_or_expired_token' });
+      const replayed = (await db.select({ id: s.refresh_tokens.id, user_id: s.refresh_tokens.user_id }).from(s.refresh_tokens).where(eq(s.refresh_tokens.token_hash, hash)).limit(1))[0];
+      if (replayed) {
+        await db
+          .update(s.refresh_tokens)
+          .set({ revoked_at: Date.now() })
+          .where(and(eq(s.refresh_tokens.user_id, replayed.user_id), isNull(s.refresh_tokens.revoked_at)));
+        logAudit({ actorUserId: replayed.user_id, action: 'auth.refresh.reuse_detected', summary: { familyRevoked: true } });
+      } else {
+        logAudit({ action: 'auth.refresh.failed', target: 'invalid_or_expired_token' });
+      }
       throw new AppError('auth.refresh.401', 401, '刷新令牌无效或已过期');
     }
-    // 轮换语义:旧 token 立即吊销,一次性换新(留痕供盗用排查)
-    await db.update(s.refresh_tokens).set({ revoked_at: Date.now() }).where(eq(s.refresh_tokens.id, row.id));
+    // 轮换语义:条件更新吊销(P1-13:rowCount=0 即并发已轮换 → 按重放处理连坐),一次性换新
+    const rotated = await db
+      .update(s.refresh_tokens)
+      .set({ revoked_at: Date.now() })
+      .where(and(eq(s.refresh_tokens.id, row.id), isNull(s.refresh_tokens.revoked_at)))
+      .returning({ id: s.refresh_tokens.id });
+    if (!rotated.length) {
+      await db
+        .update(s.refresh_tokens)
+        .set({ revoked_at: Date.now() })
+        .where(and(eq(s.refresh_tokens.user_id, row.user_id), isNull(s.refresh_tokens.revoked_at)));
+      logAudit({ actorUserId: row.user_id, action: 'auth.refresh.reuse_detected', summary: { familyRevoked: true, race: true } });
+      throw new AppError('auth.refresh.401', 401, '刷新令牌无效或已过期');
+    }
     logAudit({ actorUserId: row.user_id, action: 'auth.refresh.rotated' });
     return this.issue(row.user_id);
   }

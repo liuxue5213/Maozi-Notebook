@@ -1,6 +1,9 @@
 /** CSV 生成与下载(M08-F01):UTF-8 BOM 防 Excel 乱码,字段含逗号/引号/换行时加引号转义 */
 export function csvEscape(v: string | number): string {
-  const s = String(v);
+  let s = String(v);
+  // 公式注入防护(P1-8,Review):= + - @ 开头的单元格在 Excel/WPS 打开时会被当公式执行,
+  // 备注等字段可来自外部导入的任意文本 —— 统一前置单引号 neutralize(OWASP CSV Injection)
+  if (/^[=+\-@\t\r]/.test(s)) s = `'` + s;
   return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 
