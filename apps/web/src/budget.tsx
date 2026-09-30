@@ -2,66 +2,42 @@ import { cur } from './utils/currency';
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
-  addAmount, carryover, computeBudgetProgress, forecastBudget, formatAmount, isValidAmount, newId,
+  forecastBudget, formatAmount, isValidAmount, newId,
   BUDGET_TEMPLATES,
   type BudgetItemRow, type BudgetRow, type CategoryRow,
 } from '@ledgerone/domain';
+// 预算编排口径下沉到共享内核:Web 与 App 调用同一份 buildBudgetModel,避免两端各写一遍
+import { buildBudgetModel, type BudgetModel } from '@ledgerone/ledger-core';
 import { db } from './db/db';
 import { getActiveLedgerId } from './db/seed';
 import { enqueue } from './sync/wiring';
 import { categoryFreq } from './state/freq';
 import { periodRange } from './utils/period';
 
-interface BudgetModel {
-  budget: BudgetRow | undefined;
-  items: BudgetItemRow[];
-  /** 结转额:开启结转且上月有预算时,总/分类各自动结转正剩余 */
-  carryTotal: string;
-  carryByCat: Map<string, string>;
-  progress: ReturnType<typeof computeBudgetProgress>;
-  adjusted: ReturnType<typeof computeBudgetProgress>;
-}
-
 async function loadBudgetModel(): Promise<BudgetModel | null> {
   const ledgerId = await getActiveLedgerId();
   const { start, end } = periodRange('month');
-  const all = (await db.budgets.toArray())
-    .filter((b) => !b.is_deleted && b.ledger_id === ledgerId && b.period_type === 'monthly')
-    .sort((a, b) => b.period_start - a.period_start);
-  const budget = all[0];
-  const allItems = await db.budget_items.toArray();
-  const txs = await db.transactions.toArray();
-  const cats = await db.categories.toArray();
-  const catMap = new Map(cats.map((c) => [c.id, c]));
-
-  // 上月预算与执行 → 结转(M04-F02)
+  const [budgets, budgetItems, transactions, categories] = await Promise.all([
+    db.budgets.toArray(),
+    db.budget_items.toArray(),
+    db.transactions.toArray(),
+    db.categories.toArray(),
+  ]);
   const prevStart = (() => {
     const d = new Date(start);
     d.setMonth(d.getMonth() - 1);
     return d.getTime();
   })();
-  const prev = all.find((b) => b.period_start === prevStart);
-  const carryTotal = budget?.rollover && prev ? carryover(prev.total_amount, computeBudgetProgress(prev, [], txs, catMap, prevStart, start)?.used ?? '0') : '0';
-  const carryByCat = new Map<string, string>();
-  if (budget?.rollover && prev) {
-    const prevItems = allItems.filter((i) => !i.is_deleted && i.budget_id === prev.id);
-    const prevProg = computeBudgetProgress(prev, prevItems, txs, catMap, prevStart, start);
-    for (const it of prevProg?.items ?? []) {
-      const base = prevItems.find((x) => x.category_id === it.categoryId);
-      if (base) carryByCat.set(it.categoryId, carryover(base.amount, it.used));
-    }
-  }
-
-  const items = budget ? allItems.filter((i) => !i.is_deleted && i.budget_id === budget.id) : [];
-  const progress = computeBudgetProgress(budget ?? null, items, txs, catMap, start, end);
-  // 结转后的「实际可用」视图
-  const adjustedBudget = budget ? { total_amount: carryTotal === '0' ? budget.total_amount : addAmount(budget.total_amount, carryTotal) } : null;
-  const adjustedItems: BudgetItemRow[] = items.map((it) => {
-    const c = carryByCat.get(it.category_id);
-    return c && c !== '0' ? { ...it, amount: addAmount(it.amount, c) } : it;
+  return buildBudgetModel({
+    budgets,
+    budgetItems,
+    transactions,
+    categories,
+    ledgerId,
+    periodStart: start,
+    periodEnd: end,
+    prevPeriodStart: prevStart,
   });
-  const adjusted = computeBudgetProgress(adjustedBudget, adjustedItems, txs, catMap, start, end);
-  return { budget, items, carryTotal, carryByCat, progress, adjusted };
 }
 
 /** 预算执行卡(M04-F01/F02/F04):总预算 + 分类预算条目、结转、80% 橙 / 100% 红 */
