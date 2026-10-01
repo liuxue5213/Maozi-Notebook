@@ -5,7 +5,14 @@ import { metaGet, metaSet } from '@ledgerone/sqlite-sync';
 import * as SecureStore from 'expo-secure-store';
 import { db } from './db';
 
-const DEFAULT_SERVER = 'http://localhost:60505';
+// 默认走公网 frp 隧道:室内外都能用;局域网更快,在「我的」页一键切换
+export const DEFAULT_SERVER = 'http://43.138.212.106:55505';
+
+/** 后端预设:一键切换(公网 frp / 局域网树莓派) */
+export const SERVER_PRESETS: Array<{ label: string; url: string }> = [
+  { label: '公网 (frp)', url: 'http://43.138.212.106:55505' },
+  { label: '局域网 (树莓派)', url: 'http://192.168.1.16:60505' },
+];
 
 /** token 存系统安全区(F-05):不再落 SQLite meta(整库加密外的第二道防线) */
 const SS_ACCESS = 'lo_access';

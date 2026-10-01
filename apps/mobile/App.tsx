@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { formatAmount, newId, type TransactionRow, type TransactionType } from '@ledgerone/domain';
 import { useSyncExternalStore } from 'react';
 import { engine, scheduleSync, snapshot, startMobileAutoSync } from './src/lib/sync';
 import { initDb, listRecent, saveTx, topCategories, getActiveLedgerId, metaGet, metaSet, db } from './src/lib/store';
 import { prepareAfterLogin } from '@ledgerone/sqlite-sync';
-import { authApi, clearSession, getServerUrl, isLoggedIn, logout as logoutAll, saveSession, setServerUrl } from './src/lib/api';
+import { authApi, clearSession, getServerUrl, isLoggedIn, logout as logoutAll, saveSession, setServerUrl, SERVER_PRESETS } from './src/lib/api';
 
 type Tab = 'record' | 'list' | 'me';
 
@@ -15,7 +15,23 @@ interface Cat {
   icon: string;
 }
 
-export default function App() {
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { err: Error | null }> {
+  state = { err: null as Error | null };
+  static getDerivedStateFromError(err: Error) { return { err }; }
+  render() {
+    if (this.state.err) {
+      return (
+        <View style={{ flex: 1, padding: 24, paddingTop: 60, backgroundColor: '#fff' }}>
+          <Text style={{ fontSize: 16, fontWeight: '700', color: '#c0392b', marginBottom: 12 }}>启动出错</Text>
+          <Text style={{ fontSize: 12, color: '#333', fontFamily: 'monospace' }}>{String(this.state.err.stack || this.state.err.message || this.state.err)}</Text>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function AppInner() {
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState<Tab>('record');
   const [txs, setTxs] = useState<TransactionRow[]>([]);
@@ -203,7 +219,21 @@ function MeScreen({ logged, onLogged, syncText }: { logged: boolean; onLogged: (
       {!logged && (
         <>
           <Text style={styles.label}>服务器</Text>
-          <TextInput style={styles.input} value={server} onChangeText={setServer} autoCapitalize="none" placeholder="http://192.168.x.x:3000" placeholderTextColor="#b4bac6" />
+          <View style={{ flexDirection: 'row', gap: 8, marginBottom: 8 }}>
+            {SERVER_PRESETS.map((p) => (
+              <Pressable
+                key={p.url}
+                onPress={() => setServer(p.url)}
+                style={{
+                  flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: 'center',
+                  backgroundColor: server === p.url ? '#4361ee' : '#eef0f6',
+                }}
+              >
+                <Text style={{ color: server === p.url ? '#fff' : '#4a5160', fontSize: 12 }}>{p.label}</Text>
+              </Pressable>
+            ))}
+          </View>
+          <TextInput style={styles.input} value={server} onChangeText={setServer} autoCapitalize="none" placeholder="http://192.168.x.x:60505" placeholderTextColor="#b4bac6" />
           <Text style={styles.label}>邮箱</Text>
           <TextInput style={styles.input} value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" placeholder="you@example.com" placeholderTextColor="#b4bac6" />
           <Text style={styles.label}>密码</Text>
@@ -266,3 +296,11 @@ const styles = StyleSheet.create({
   tabLabel: { color: '#8a919f', fontSize: 13 },
   tabLabelActive: { color: '#4361ee', fontWeight: '700' },
 });
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppInner />
+    </ErrorBoundary>
+  );
+}
