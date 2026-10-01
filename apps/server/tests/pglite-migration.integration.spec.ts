@@ -26,6 +26,12 @@ it('将旧 PGlite 备份完整导入 MySQL，并拒绝重复导入', async () =>
     await admin.query(`CREATE DATABASE \`${dbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
     target = await mysql.createConnection(targetUrl.toString());
     await migrate(drizzle({ client: target }), { migrationsFolder: resolve(serverDir, 'drizzle-mysql') });
+    // 迁移后立即断言脚本依赖的元表已就绪(否则脚本侧报"尚未迁移"难定位)
+    const [tbls] = await target.query<mysql.RowDataPacket[]>(
+      'SELECT table_name AS tn FROM information_schema.tables WHERE table_schema = DATABASE()',
+    );
+    const names = tbls.map((r) => String(r.tn));
+    expect(names).toEqual(expect.arrayContaining(['__drizzle_migrations', 'sync_seq']));
 
     const source = new PGlite(sourceDir);
     try {

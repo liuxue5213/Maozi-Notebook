@@ -121,6 +121,9 @@ function BudgetModal({
 }) {
   const [amount, setAmount] = useState(original?.total_amount ?? '');
   const [rollover, setRollover] = useState(original?.rollover ?? false);
+  // 总预算输入框被用户手动改过 → 保存时分类额度按比例跟随;
+  // 未手动改过 → 编辑分类配额时总预算自动合计跟随
+  const [totalTouched, setTotalTouched] = useState(false);
   const [itemDrafts, setItemDrafts] = useState<Record<string, string>>(() =>
     Object.fromEntries(originalItems.map((i) => [i.category_id, i.amount])),
   );
@@ -161,12 +164,12 @@ function BudgetModal({
     }
     await saveLocal('budget', row as unknown as Record<string, unknown>);
 
-    // 改总预算时,未单独改动的分类额度按比例缩放,合计精确等于新总额(取整余数补给最大项);
-    // 用户本轮手动改过/清空的条目保持其意图不动
+    // 改总预算(用户手动改动)时,未单独改动的分类额度按比例缩放,合计精确等于新总额
+    // (取整余数补给最大项);用户本轮手动改过/清空的条目保持其意图不动
     const drafts: Record<string, string> = { ...itemDrafts };
     const oldTotal = original ? Number(original.total_amount) : NaN;
     const newTotal = Number(amount);
-    if (original && originalItems.length > 0 && oldTotal > 0 && newTotal > 0 && oldTotal !== newTotal) {
+    if (totalTouched && original && originalItems.length > 0 && oldTotal > 0 && newTotal > 0 && oldTotal !== newTotal) {
       const untouched = originalItems
         .map((it) => {
           const d = drafts[it.category_id]?.trim() ?? '';
@@ -265,7 +268,12 @@ function BudgetModal({
         )}
         <div className="field">
           <label>月度总预算</label>
-          <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" placeholder="如 5000" />
+          <input
+            value={amount}
+            onChange={(e) => { setAmount(e.target.value); setTotalTouched(true); }}
+            inputMode="decimal"
+            placeholder="如 5000"
+          />
         </div>
         <label className="check-row">
           <input type="checkbox" checked={rollover} onChange={(e) => setRollover(e.target.checked)} />
@@ -294,7 +302,16 @@ function BudgetModal({
                 <span className="budget-cat-name">{c.icon} {c.name}</span>
                 <input
                   value={itemDrafts[c.id] ?? ''}
-                  onChange={(e) => setItemDrafts((d) => ({ ...d, [c.id]: e.target.value }))}
+                  onChange={(e) => {
+                    const next = { ...itemDrafts, [c.id]: e.target.value };
+                    setItemDrafts(next);
+                    // 分类配额手动调整 → 总预算自动跟随合计(总预算被手动改过则不联动)
+                    if (!totalTouched) {
+                      const sum = Object.values(next).reduce(
+                        (s, v) => (v && isValidAmount(v.trim()) && Number(v) > 0 ? s + Number(v) : s), 0);
+                      if (sum > 0) setAmount(String(sum));
+                    }
+                  }}
                   inputMode="decimal"
                   placeholder="不限"
                 />

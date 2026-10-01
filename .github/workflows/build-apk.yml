@@ -35,10 +35,19 @@ jobs:
         working-directory: apps/mobile
         run: pnpm exec expo prebuild -p android --no-install
 
+      # expo prebuild 模板的 wrapper 版本可能落后于 AGP 最低要求(9.4.1),对齐后再构建
+      - name: Align gradle wrapper with AGP requirement
+        working-directory: apps/mobile/android
+        run: |
+          sed -i 's#gradle-[0-9.]*-bin.zip#gradle-9.4.1-bin.zip#' gradle/wrapper/gradle-wrapper.properties
+          grep distributionUrl gradle/wrapper/gradle-wrapper.properties
+
       - name: Cache gradle
         uses: actions/cache@v4
         with:
-          path: ~/.gradle/caches
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
           key: gradle-${{ hashFiles('apps/mobile/android/gradle/wrapper/gradle-wrapper.properties', 'apps/mobile/android/build.gradle', 'apps/mobile/android/app/build.gradle') }}
           restore-keys: gradle-
 

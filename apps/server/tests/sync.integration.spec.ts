@@ -362,10 +362,13 @@ describe('安全审计留痕(audit_logs)', () => {
       await expect(authService.login({ phone, code: '000000' })).rejects.toMatchObject({ status: 401 });
     }
     await expect(authService.login({ phone, code: '000000' })).rejects.toMatchObject({ status: 423 });
+    // 第 5 次的 verify_failed 是 fire-and-forget 写入,轮询等它落地(CI 上同步查会偶发少 1 条)
+    const fifth = await waitForAudit('auth.code.verify_failed',
+      (r: any) => r.target_entity === `****${phone.slice(-4)}` && r.summary?.attempts === 5);
+    expect(fifth.summary).toMatchObject({ attempts: 5 });
     const failed = await db.select().from(schema.audit_logs).where(eq(schema.audit_logs.action, 'auth.code.verify_failed'));
     const mine = failed.filter((r: any) => r.target_entity === `****${phone.slice(-4)}`);
     expect(mine.length).toBe(5);
-    expect(mine[4].summary).toMatchObject({ attempts: 5 });
     await waitForAudit('auth.code.locked', (r) => r.target_entity === `****${phone.slice(-4)}` && r.summary?.phase === 'lock_created');
     // 锁定期内:校验被拒与重发被拒各留一条(是攻击探测信号)
     await expect(authService.login({ phone, code: '000000' })).rejects.toMatchObject({ status: 423 });

@@ -36,7 +36,7 @@ try {
   );
   const targetNames = new Set(targetTables.map((row) => row.table_name));
   if (!targetNames.has('__drizzle_migrations') || !targetNames.has('sync_seq')) {
-    throw new Error('目标库尚未运行 MySQL 迁移;请先在空库启动服务端一次');
+    throw new Error(`目标库尚未运行 MySQL 迁移;请先在空库启动服务端一次(实际找到 ${targetNames.size} 张表: ${[...targetNames].sort().join(', ') || '无'})`);
   }
   const sourceTables = new Set((await source.query(
     "SELECT tablename FROM pg_tables WHERE schemaname = 'public'",
