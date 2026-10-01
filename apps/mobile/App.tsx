@@ -215,6 +215,7 @@ function MeScreen({ logged, onLogged, syncText }: { logged: boolean; onLogged: (
   return (
     <ScrollView contentContainerStyle={styles.form}>
       <Text style={styles.meTitle}>{logged ? '已登录 · 云同步开启' : '未登录 · 纯本地模式'}</Text>
+      <Text style={styles.muted}>离线也能记账:数据先存本机,连上服务器后自动同步</Text>
       <Text style={styles.muted}>同步状态:{syncText}</Text>
       {!logged && (
         <>
