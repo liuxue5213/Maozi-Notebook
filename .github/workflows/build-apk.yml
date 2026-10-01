@@ -16,7 +16,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # pnpm 11 要求 Node ≥ 22.13
+          node-version: 24
           cache: pnpm
 
       - uses: actions/setup-java@v4
