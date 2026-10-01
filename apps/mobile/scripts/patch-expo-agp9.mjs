@@ -15,6 +15,17 @@
  * 用 Node 而非 Python 的原因:本项目是 Node/TS 技术栈,CI runner 已装 Node,
  * 不额外引入 Python 解释器依赖。
  *
+ * 补丁清单:
+ *   1. 内置 gradle 插件 Kotlin 统一 2.3.0 + kotlinOptions → compilerOptions
+ *   2. 移除旧式 kotlin-android 应用(AGP 9 内置 Kotlin,重复注册会报错)
+ *   3. expo-module-gradle-plugin 编译依赖 AGP 8.5.0 → 9.2.1
+ *   4. 迁移 AGP 9 移除/变动的 API(LibraryExtension 包路径、lintOptions、
+ *      targetSdk、publishing singleVariant、versionName)
+ *   5. canBePublished 默认 true → false(第 4 步移除了 'release' 组件注册,
+ *      而 9 个未显式关闭发布的模块会去读它 → SoftwareComponent not found)
+ *   6. 为"声明了 buildConfigField 却未开启 buildConfig"的模块补开关
+ *      (AGP 9 下 library 的 buildConfig 默认关闭;@expo/log-box 漏开)
+ *
  * 幂等:重复运行无副作用(第二次运行 patched 数为 0)。
  * 用法: node scripts/patch-expo-agp9.mjs [仓库根路径]
  *       缺省取 $GITHUB_WORKSPACE,再缺省取 cwd。
@@ -68,7 +79,6 @@ const expoPluginKt = allFiles.filter(
   (f) => f.endsWith('.kt') && norm(f).includes('expo-module-gradle-plugin/src/'),
 );
 const expoPluginBuildKts = ktsFiles.filter((f) => norm(f).includes('expo-module-gradle-plugin/'));
-
 // ---- 1) 内置 gradle 插件:Kotlin 统一 2.3.0 + 迁移废弃 DSL ----
 // Gradle 9.4.1 自带 Kotlin 2.3.0,插件里钉死的旧版本元数据与之不兼容。
 const RE_KOTLIN_JVM = /kotlin\("jvm"\) version "[^"]+"/g;
@@ -150,7 +160,49 @@ for (const f of expoPluginKt) {
   if (s2 !== s) save(f, s2);
 }
 
-// ---- 5) 自检:确保补丁真的生效,且没有把源码改成语法非法的样子 ----
+// ---- 5) 默认关闭 maven 发布 ----
+// applyPublishing() 在 canBePublished=true 时会构造 PublicationInfo,而后者依赖
+// applyPublishingVariant() 注册的 'release' 软件组件 —— 该注册已在第 4 步被移除。
+// 实测有 9 个 expo 模块没显式写 `canBePublished false`,会走到这条路径并抛
+// "SoftwareComponent with name 'release' not found"。
+// APK 构建不需要 maven 发布,故把默认值改为 false,统一走空任务分支
+// (createEmptyExpoPublishTask,即 :expo / :expo-log-box 已经在用的正常路径)。
+for (const f of expoPluginKt) {
+  if (path.basename(f) !== 'ExpoModuleExtension.kt') continue;
+  const s = fs.readFileSync(f, 'utf8');
+  const s2 = s.replace(
+    'var canBePublished: Boolean = true',
+    'var canBePublished: Boolean = false // AGP9 patch: APK 构建不需要 maven 发布',
+  );
+  if (s2 !== s) save(f, s2);
+}
+
+// ---- 6) 为"声明了 buildConfigField 却未开启 buildConfig"的模块补上开关 ----
+// AGP 9 下 library 模块的 buildConfig 默认关闭;@expo/log-box 在 defaultConfig 里
+// 声明了 buildConfigField 却没开该特性,configure 阶段直接报
+// "defaultConfig contains custom BuildConfig fields, but the feature is disabled"。
+// 按 AGP 报错提示的做法,逐个模块补 `buildFeatures { buildConfig true }`。
+const RE_BUILD_CONFIG_ON = /buildFeatures\s*\{[\s\S]{0,300}?buildConfig\s*(?:=\s*)?true/;
+
+function enableBuildConfig(file) {
+  const s = fs.readFileSync(file, 'utf8');
+  if (!/buildConfigField/.test(s)) return;
+  if (RE_BUILD_CONFIG_ON.test(s)) return;
+  // 插到 android 块的 namespace 行之后(AGP 强制要求 namespace,必定存在);
+  // 兜底插到 `android {` 之后。
+  const m = s.match(/^([ \t]*)namespace\b[^\n]*$/m) || s.match(/^([ \t]*)android\s*\{[ \t]*$/m);
+  if (!m) return;
+  const indent = m[1];
+  const block = `\n${indent}buildFeatures {\n${indent}  buildConfig true\n${indent}}`;
+  const at = m.index + m[0].length;
+  save(file, s.slice(0, at) + block + s.slice(at));
+}
+
+for (const f of androidBuildGradle) enableBuildConfig(f);
+const appModuleGradle = path.join(root, 'apps/mobile/android/app/build.gradle');
+if (fs.existsSync(appModuleGradle)) enableBuildConfig(appModuleGradle);
+
+// ---- 7) 自检:确保补丁真的生效,且没有把源码改成语法非法的样子 ----
 const problems = [];
 
 const pubFile = expoPluginKt.find((f) => path.basename(f) === 'MavenPublicationExtension.kt');
@@ -180,6 +232,24 @@ if (extFile && fs.readFileSync(extFile, 'utf8').includes('publishing { publishin
 const pluginBuild = expoPluginBuildKts[0];
 if (pluginBuild && !fs.readFileSync(pluginBuild, 'utf8').includes(':gradle:9.2.1')) {
   problems.push('expo-module-gradle-plugin 的 AGP 编译依赖未升到 9.2.1');
+}
+
+// 发布默认值必须为 false,否则会重新触发 "SoftwareComponent 'release' not found"
+const extKt = expoPluginKt.find((f) => path.basename(f) === 'ExpoModuleExtension.kt');
+if (!extKt) {
+  problems.push('未找到 ExpoModuleExtension.kt,发布开关补丁可能未命中');
+} else if (!fs.readFileSync(extKt, 'utf8').includes('var canBePublished: Boolean = false')) {
+  problems.push("canBePublished 默认值未改为 false,会触发 SoftwareComponent 'release' not found");
+}
+
+// 任何声明 buildConfigField 的模块都必须已开启 buildConfig
+const moduleGradles = [...androidBuildGradle];
+if (fs.existsSync(appModuleGradle)) moduleGradles.push(appModuleGradle);
+for (const f of moduleGradles) {
+  const s = fs.readFileSync(f, 'utf8');
+  if (/buildConfigField/.test(s) && !RE_BUILD_CONFIG_ON.test(s)) {
+    problems.push(`模块声明了 buildConfigField 但未开启 buildConfig:${path.relative(root, f)}`);
+  }
 }
 
 if (problems.length > 0) {
