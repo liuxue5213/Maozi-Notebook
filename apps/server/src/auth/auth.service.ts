@@ -229,9 +229,57 @@ export class AuthService {
     logAudit({ actorUserId: userId, action: 'auth.logout' });
   }
 
+  /**
+   * 注销账号(P0-6,第 28 轮):验证密码 → 软删身份与数据足迹 → 吊销全部会话。
+   * 范围(PRD 10.2「注销」最小合规语义):
+   * - users.status='deleted',email/phone 置空(释放唯一键,允许重新注册);密码哈希清空;
+   * - 该用户的 ledger_members 行软删;其 **拥有的** 账本软删(数据保留 30 天随 purge 硬删);
+   * - 全部 refresh token 吊销;
+   * - 共享账本中该用户创建的流水保留(数据归属账本,不因成员注销而消失)。
+   */
+  async deleteAccount(userId: string, password: string): Promise<{ deleted: true }> {
+    const u = (await db.select().from(s.users).where(eq(s.users.id, userId)).limit(1))[0];
+    if (!u || !u.password_hash || !(await verifyPassword(password, u.password_hash))) {
+      logAudit({ actorUserId: userId, action: 'auth.delete.failed', summary: { reason: 'bad_credentials' } });
+      throw new AppError('auth.delete.403', 403, '密码验证失败,未注销');
+    }
+    const now = Date.now();
+    await db.transaction(async (tx: any) => {
+      // 成员行软删(非拥有账本的成员资格终止)
+      const memberships = await tx
+        .select({ id: s.ledger_members.id })
+        .from(s.ledger_members)
+        .where(and(eq(s.ledger_members.user_id, userId), eq(s.ledger_members.is_deleted, false)));
+      for (const m of memberships) {
+        await tx.update(s.ledger_members).set({ is_deleted: true, deleted_at: now, updated_at: now }).where(eq(s.ledger_members.id, m.id));
+      }
+      // 拥有的账本软删(与 ledger.service.remove 同语义;账本内数据保留至 purge)
+      const owned = await tx
+        .select({ id: s.ledgers.id })
+        .from(s.ledgers)
+        .where(and(eq(s.ledgers.owner_user_id, userId), eq(s.ledgers.is_deleted, false)));
+      for (const l of owned) {
+        await tx.update(s.ledgers).set({ is_deleted: true, deleted_at: now, updated_at: now }).where(eq(s.ledgers.id, l.id));
+      }
+      // 身份:状态置 deleted + 凭据/联系信息清空(邮箱/手机唯一键释放)
+      await tx
+        .update(s.users)
+        .set({ status: 'deleted', password_hash: null, email: null, phone: null, updated_at: now })
+        .where(eq(s.users.id, userId));
+      // 会话:全部吊销
+      await tx
+        .update(s.refresh_tokens)
+        .set({ revoked_at: now })
+        .where(and(eq(s.refresh_tokens.user_id, userId), isNull(s.refresh_tokens.revoked_at)));
+    });
+    logAudit({ actorUserId: userId, action: 'auth.account.deleted', summary: { ownedLedgers: 'soft-deleted' } });
+    return { deleted: true };
+  }
+
   async me(userId: string) {
     const u = (await db.select().from(s.users).where(eq(s.users.id, userId)).limit(1))[0];
-    if (!u) throw new AppError('auth.user.404', 404, '用户不存在');
+    // P0-6:已注销账号拒绝访问(access token 最长残留 2 小时,注销后必须立即失效)
+    if (!u || u.status === 'deleted') throw new AppError('auth.user.404', 404, '用户不存在');
     return this.publicUser(u);
   }
 

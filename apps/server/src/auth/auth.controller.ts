@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
 import { SUPPORTED_CURRENCIES } from '@ledgerone/domain';
@@ -37,11 +37,14 @@ const loginSchema = z
 
 const refreshSchema = z.object({ refreshToken: z.string().min(10) });
 
+const deleteAccountSchema = z.object({ password: z.string().min(8).max(64) });
+
 type RegisterBody = z.infer<typeof registerSchema>;
 type UpdateMeBody = z.infer<typeof updateMeSchema>;
 type CodeBody = z.infer<typeof codeSchema>;
 type LoginBody = z.infer<typeof loginSchema>;
 type RefreshBody = z.infer<typeof refreshSchema>;
+type DeleteAccountBody = z.infer<typeof deleteAccountSchema>;
 
 @Controller()
 export class AuthController {
@@ -74,6 +77,13 @@ export class AuthController {
   @UseGuards(JwtGuard)
   me(@Req() req: AuthedRequest) {
     return this.auth.me(req.userId);
+  }
+
+  /** 注销账号(P0-6,第 28 轮):密码验证 + 级联软删 + 全端下线(合规上线门禁) */
+  @Delete('v1/users/me')
+  @UseGuards(JwtGuard)
+  deleteMe(@Req() req: AuthedRequest, @Body(new ZodValidationPipe(deleteAccountSchema)) body: DeleteAccountBody) {
+    return this.auth.deleteAccount(req.userId, body.password);
   }
 
   /** 账号设置(第 16 轮):昵称 + 主币种(白名单校验,大小写归一) */

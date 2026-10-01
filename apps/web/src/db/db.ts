@@ -63,6 +63,10 @@ export class LedgerDB extends Dexie {
     this.version(2).stores({
       deadletter: '++id, entityId, at',
     });
+    // v3(P0-4,第 28 轮):明细双下推复合索引 [ledger_id+happened_at] —— 切账本 + 日期范围均走索引
+    this.version(3).stores({
+      transactions: 'id, ledger_id, happened_at, type, account_id, category_id, server_version, [ledger_id+happened_at]',
+    });
   }
 }
 

@@ -133,7 +133,16 @@ export function MeTab({ onOpenAuth, onAuthChanged }: { onOpenAuth: () => void; o
   if (view === 'accounts') return <AccountsPage onBack={() => setView('menu')} />;
   if (view === 'ledgers') return <LedgerPanel onBack={() => setView('menu')} />;
   if (view === 'categories') return <CategoryPanel onBack={() => setView('menu')} />;
-  if (view === 'settings') return <SettingsPage onBack={() => setView('menu')} />;
+  if (view === 'settings') return (
+    <SettingsPage
+      onBack={() => setView('menu')}
+      onDeleted={() => {
+        // 注销后:本地已清,回到未登录态并刷新外层
+        setView('menu');
+        onAuthChanged?.();
+      }}
+    />
+  );
   if (view === 'export') return <ExportPage onBack={() => setView('menu')} />;
   if (view === 'security') return <SecurityPanel onBack={() => setView('menu')} />;
   if (view === 'pending') return <PendingPage onBack={() => setView('menu')} />;

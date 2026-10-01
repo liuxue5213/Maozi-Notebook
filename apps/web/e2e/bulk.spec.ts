@@ -39,10 +39,13 @@ test('明细大数据量:限外老流水可搜到 + 截断提示 + 计数不失�
   });
   expect(seeded).toBeGreaterThanOrEqual(550);
 
-  // ② 无筛选:截断提示出现(共 550 命中 > 500)
+  // ② 无筛选:分页加载 —— 首批 50/共 550,「加载更多」逐批递增(P0-4 UI)
   await page.getByRole('navigation').getByRole('button', { name: /明细/ }).click();
-  await expect(page.getByText(/已显示最近 500 条/)).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByText(/共 550 条命中/)).toBeVisible();
+  await expect(page.getByText(/已加载 50 .* 共 550 条命中/)).toBeVisible({ timeout: 15_000 });
+  const loadMore = page.getByRole('button', { name: '加载更多' });
+  await expect(loadMore).toBeVisible();
+  await loadMore.click(); // +50
+  await expect(page.getByText(/已加载 100 .* 共 550 条命中/)).toBeVisible({ timeout: 15_000 });
 
   // ① 修复核心:关键词搜「bulk-0010」(第 11 新 → 展示上限之外的老流水)必须命中
   await page.getByRole('button', { name: /筛选/ }).click();

@@ -589,3 +589,35 @@ describe('安全 P1 批次(第 23 轮,Review 2C)', () => {
     await expect(svc.remove(u.userId, ids.ledgerId)).rejects.toMatchObject({ status: 403 });
   });
 });
+
+describe('注销账号(P0-6,第 28 轮)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let schema: any;
+  beforeAll(async () => {
+    schema = await import('../src/db/schema');
+  });
+  it('密码验证 + 级联软删 + 全端下线;错误密码 403 不注销', async () => {
+    const email = `del${Date.now()}@test.dev`;
+    const r = await authService.register({ email, password: 'delpassword123', nickname: 't' });
+    const ids = await pullIds(r.user.id);
+    // 错误密码 → 403,未注销
+    await expect(authService.deleteAccount(r.user.id, 'wrong-password')).rejects.toMatchObject({ status: 403 });
+    const alive = await db.select().from(schema.users).where(eq(schema.users.id, r.user.id));
+    expect(alive[0].status).toBe('active');
+    // 正确密码 → 注销:身份/成员/账本软删,token 吊销
+    expect(await authService.deleteAccount(r.user.id, 'delpassword123')).toEqual({ deleted: true });
+    const user = (await db.select().from(schema.users).where(eq(schema.users.id, r.user.id)))[0];
+    expect(user.status).toBe('deleted');
+    expect(user.email).toBeNull(); // 唯一键释放,允许重新注册
+    expect(user.password_hash).toBeNull();
+    const members = await db.select().from(schema.ledger_members).where(eq(schema.ledger_members.user_id, r.user.id));
+    expect(members.every((m: any) => m.is_deleted)).toBe(true);
+    const owned = await db.select().from(schema.ledgers).where(eq(schema.ledgers.owner_user_id, r.user.id));
+    expect(owned.length).toBeGreaterThan(0);
+    expect(owned.every((l: any) => l.is_deleted)).toBe(true);
+    // 会话:/me 404(身份已删),refresh 401
+    await expect(authService.me(r.user.id)).rejects.toMatchObject({ status: 404 });
+    await expect(authService.refresh(r.refreshToken)).rejects.toMatchObject({ status: 401 });
+    void ids;
+  });
+});

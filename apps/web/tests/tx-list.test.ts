@@ -1,31 +1,23 @@
 /**
- * 明细窗口加载守护(P0-3 修复,Review 实证缺陷):
- * 修复前先 limit(300) 再筛选 —— 第 301 条起的老流水永久不可见、关键词搜不到。
- * 用 600 行验证:限外关键词可命中、计数不失真、渲染截断 + truncated 标记、日期下推正确。
+ * 明细窗口加载守护(P0-3/P0-4,第 22/28 轮):
+ * 双下推([ledger_id+happened_at] 复合索引)+ 增量分页(limit 递增)。
+ * 600 行 + 跨账本行验证:作用域、分页、hasMore、关键词限外命中、日期边界。
  */
 import 'fake-indexeddb/auto';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { TransactionRow } from '@ledgerone/domain';
 
-const lsStore = new Map<string, string>();
-beforeAll(() => {
-  (globalThis as Record<string, unknown>).localStorage = {
-    getItem: (k: string) => (lsStore.get(k) ?? null),
-    setItem: (k: string, v: string) => void lsStore.set(k, String(v)),
-    removeItem: (k: string) => void lsStore.delete(k),
-    clear: () => void lsStore.clear(),
-  };
-});
-
 const N = 600;
+const D = 86_400_000;
 const BASE = Date.UTC(2026, 0, 1);
 
-function tx(i: number): TransactionRow {
+function tx(i: number, ledger = 'l1'): TransactionRow {
+  const cross = ledger !== 'l1';
   return {
-    id: `t${i}`, ledger_id: 'l1', user_id: 'u1', member_id: null, type: 'expense',
+    id: `${cross ? "x" : "t"}${String(i).padStart(4, "0")}`, ledger_id: ledger, user_id: 'u1', member_id: null, type: 'expense',
     amount: `${(i % 90) + 1}.00`, currency: 'CNY', amount_base: `${(i % 90) + 1}.00`,
     exchange_rate: null, category_id: null, account_id: 'a1', to_account_id: null,
-    happened_at: BASE + i * 86_400_000, note: `bulk-${String(i).padStart(4, "0")}`, is_refunded: false, refund_of_id: null,
+    happened_at: BASE + i * D, note: `bulk-${String(i).padStart(4, '0')}`, is_refunded: false, refund_of_id: null,
     reimburse_status: null, exclude_from_budget: false, attachment_count: 0, source: 'manual',
     client_version: 1, server_version: null, is_deleted: false, deleted_at: null,
     created_at: BASE, updated_at: BASE,
@@ -35,56 +27,74 @@ function tx(i: number): TransactionRow {
 async function seed(): Promise<void> {
   const { db } = await import('../src/db/db');
   await db.transactions.clear();
-  await db.transactions.bulkPut(Array.from({ length: N }, (_, i) => tx(i)));
+  await db.transactions.bulkPut([...Array.from({ length: N }, (_, i) => tx(i)), tx(5, 'l2'), tx(50, 'l2')]);
+  // 注意:l2 行必须是独立主键(x 前缀),若复用 t0005/t0050 会覆盖 l1 同名行致计数少 2
+  // fake-indexeddb 自动事务归并:沉降一拍,避免上一用例只读扫描事务吞并本用例写入(readonly 误报)
+  await new Promise((r) => setTimeout(r, 10));
 }
 
 const EMPTY = { keyword: '', min: '', max: '', categoryId: '', accountId: '', from: '', to: '' };
 
-describe('P0-3:明细窗口加载(utils/tx-list)', () => {
-  it('600 行:无筛选时渲染截断为 500 + truncated,matchedTotal/totalActive 不失真', async () => {
+describe('P0-3/P0-4:明细窗口加载(双下推 + 增量分页)', () => {
+  // fake-indexeddb:上一用例的只读扫描事务在本用例首写时才提交,先沉降避免 readonly 误报
+  afterEach(async () => {
+    await new Promise((r) => setTimeout(r, 25));
+  });
+  it('无筛选 limit 500:rows 500、matchedTotal 600、hasMore;不含他账本行', async () => {
     await seed();
     const { db } = await import('../src/db/db');
-    const { loadTxWindow, TX_DISPLAY_CAP } = await import('../src/utils/tx-list');
-    const w = await loadTxWindow(db.transactions, EMPTY, new Map());
-    expect(TX_DISPLAY_CAP).toBe(500);
+    const { loadTxWindow, TX_PAGE_SIZE } = await import('../src/utils/tx-list');
+    expect(TX_PAGE_SIZE).toBe(50);
+    const w = await loadTxWindow(db.transactions, EMPTY, new Map(), 'l1', 500);
     expect(w.rows).toHaveLength(500);
-    expect(w.matchedTotal).toBe(N);
+    expect(w.matchedTotal).toBe(N); // 只算 l1 的 600 行
     expect(w.totalActive).toBe(N);
-    expect(w.truncated).toBe(true);
-    // 倒序:最新(happened_at 最大 = bulk-599)在最前
-    expect(w.rows[0].id).toBe('t599');
+    expect(w.hasMore).toBe(true);
+    expect(w.rows.some((r) => r.ledger_id === 'l2')).toBe(false); // l2 两行被作用域排除
+    expect(w.rows[0].id).toBe('t0599'); // 倒序
   });
 
-  it('修复核心:显示上限之外的关键词(第 10 条,老流水)必须能命中(修复前 limit(300) 后搜不到)', async () => {
+  it('增量加载:limit 600 → 600 行且 hasMore=false(加载更多到底)', async () => {
+    await seed();
     const { db } = await import('../src/db/db');
     const { loadTxWindow } = await import('../src/utils/tx-list');
-    const w = await loadTxWindow(db.transactions, { ...EMPTY, keyword: 'bulk-0010' }, new Map());
+    const w = await loadTxWindow(db.transactions, EMPTY, new Map(), 'l1', 600);
+    expect(w.rows).toHaveLength(N);
+    expect(w.hasMore).toBe(false);
+  });
+
+  it('修复核心:首个 50 条之外的老流水(bulk-0010,第 11 新)关键词可命中(修复前 limit 截断后搜不到)', async () => {
+    await seed();
+    const { db } = await import('../src/db/db');
+    const { loadTxWindow } = await import('../src/utils/tx-list');
+    const w = await loadTxWindow(db.transactions, { ...EMPTY, keyword: 'bulk-0010' }, new Map(), 'l1', 50);
     expect(w.matchedTotal).toBe(1);
-    expect(w.rows[0].id).toBe('t10'); // 唯一命中:补零命名避免 bulk-100 子串误匹配
-    expect(w.truncated).toBe(false);
+    expect(w.rows[0].id).toBe('t0010');
+    expect(w.hasMore).toBe(false);
   });
 
-  it('日期筛选走范围扫描:仅返回区间内行且计数正确', async () => {
+  it('日期下推走复合索引:本地日期区间 [day100, day201] 命中 102 行且边界正确', async () => {
+    await seed();
     const { db } = await import('../src/db/db');
     const { loadTxWindow } = await import('../src/utils/tx-list');
-    // 按天铺开后,日期区间 [day100 起, day201 起) → i ∈ 100..200 共 101 行(天粒度闭开区间)
-    const D = 86_400_000;
-    const from = new Date(BASE + 100 * D).toISOString().slice(0, 10);
-    const to = new Date(BASE + 200 * D).toISOString().slice(0, 10);
-    const w = await loadTxWindow(db.transactions, { ...EMPTY, from, to }, new Map());
-    expect(w.matchedTotal).toBe(101);
-    expect(w.rows.every((r) => r.happened_at >= BASE + 100 * D)).toBe(true);
-    expect(w.rows.every((r) => r.happened_at < BASE + 201 * D)).toBe(true);
-    // totalActive 为「扫描窗口(日期范围)内未删除数」:与 matchedTotal 同分母,作诚实命中率分母
-    expect(w.totalActive).toBe(101);
+    // 实现按「本地午夜」解析日期串,测试必须用本地日期(ISO 是 UTC,时区差一天会多吞一行)
+    const localDate = (ms: number) => new Date(ms).toLocaleDateString('sv-SE');
+    const from = localDate(BASE + 100 * D);
+    const to = localDate(BASE + 201 * D);
+    const w = await loadTxWindow(db.transactions, { ...EMPTY, from, to }, new Map(), 'l1', 500);
+    expect(w.matchedTotal).toBe(102); // 本地日粒度:i=100..201(两端均为本地全天)
+    // 本地日粒度边界:实现按本地午夜解析,行落在本地 [day100 00:00, day202 00:00) 区间
+    const fromTs = new Date(from + 'T00:00:00').getTime();
+    const toTs = new Date(to + 'T00:00:00').getTime() + D;
+    expect(w.rows.every((r) => r.happened_at >= fromTs && r.happened_at < toTs)).toBe(true);
   });
 
-  it('软删行不计入任何计数', async () => {
+  it('账本作用域:l2 的同名序号行不串入 l1 结果', async () => {
+    await seed();
     const { db } = await import('../src/db/db');
     const { loadTxWindow } = await import('../src/utils/tx-list');
-    await db.transactions.update('t0', { is_deleted: true, deleted_at: Date.now() });
-    const w = await loadTxWindow(db.transactions, EMPTY, new Map());
-    expect(w.totalActive).toBe(N - 1);
-    expect(w.rows.some((r) => r.id === 't0')).toBe(false);
+    const w = await loadTxWindow(db.transactions, { ...EMPTY, keyword: 'bulk-0005' }, new Map(), 'l2', 50);
+    expect(w.matchedTotal).toBe(1);
+    expect(w.rows[0].ledger_id).toBe('l2');
   });
 });

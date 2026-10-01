@@ -115,6 +115,9 @@ export const authApi = {
   /** 账号设置(第 16 轮):昵称/主币种;响应为更新后的 publicUser */
   updateMe: (patch: { nickname?: string; baseCurrency?: string }) =>
     apiFetch('/v1/users/me', { method: 'PATCH', body: JSON.stringify(patch) }) as Promise<SessionUser & { baseCurrency: string }>,
+  /** 注销账号(P0-6,第 28 轮):密码验证 + 级联软删 + 全端下线;成功后本地 token 需清除 */
+  deleteMe: (password: string) =>
+    apiFetch('/v1/users/me', { method: 'DELETE', body: JSON.stringify({ password }) }) as Promise<{ deleted: true }>,
 };
 
 export function makeTransport(): SyncTransport {

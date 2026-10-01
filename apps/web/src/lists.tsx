@@ -1,11 +1,11 @@
 import { cur } from './utils/currency';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { addAmount, formatAmount, subAmount, type CategoryRow, type TransactionRow } from '@ledgerone/domain';
 import { db } from './db/db';
 import { getActiveLedgerId } from './db/seed';
 import { enqueue } from './sync/wiring';
-import { loadTxWindow, TX_DISPLAY_CAP } from './utils/tx-list';
+import { loadTxWindow, TX_PAGE_SIZE } from './utils/tx-list';
 import { TxEditor } from './txedit';
 import { CalendarView } from './calendar';
 
@@ -152,15 +152,16 @@ export function TransactionList() {
   const [view, setView] = useState<'active' | 'recycle' | 'calendar'>('active');
   const [filterOpen, setFilterOpen] = useState(false);
   const [filter, setFilter] = useState<TxFilter>(EMPTY_FILTER);
+  const [loaded, setLoaded] = useState(TX_PAGE_SIZE); // P0-4:增量加载,「加载更多」递增
+  useEffect(() => setLoaded(TX_PAGE_SIZE), [filter]); // 筛选变化回首批
 
   const activeData = useLiveQuery(async () => {
     const cats = await db.categories.toArray();
     const accounts = await db.accounts.toArray();
     const catMap = new Map(cats.map((c) => [c.id, c]));
     const accMap = new Map(accounts.map((a) => [a.id, a]));
-    // P0-3 修复:全量过滤(日期下推索引)+ 仅渲染截断(见 utils/tx-list),不再先 limit(300) 再筛
-    // P1-4:明细按当前账本作用域,多账本数据不互串
-    const window = await loadTxWindow(db.transactions, filter, catMap, TX_DISPLAY_CAP, await getActiveLedgerId());
+    // P0-3/P0-4:双下推(账本+日期走复合索引)+ 全量过滤 + 按 limit 增量加载(「加载更多」递增)
+    const window = await loadTxWindow(db.transactions, filter, catMap, await getActiveLedgerId(), loaded);
     const rows = window.rows;
     const groups = new Map<number, DayGroup>();
     for (const r of rows) {
@@ -184,7 +185,7 @@ export function TransactionList() {
       g.rows.push(d);
     }
     return { groups: [...groups.values()], catMap, accounts, ...window };
-  }, [filter]);
+  }, [filter, loaded]);
 
   const recycled = useLiveQuery(
     async () =>
@@ -235,9 +236,10 @@ export function TransactionList() {
         <FilterPanel filter={filter} onChange={setFilter} cats={activeData.catMap ? [...activeData.catMap.values()] : []} accounts={activeData.accounts} />
       )}
 
-      {view === 'active' && activeData?.truncated && (
-        <div className="banner" role="status">
-          已显示最近 {TX_DISPLAY_CAP} 条(共 {activeData.matchedTotal} 条命中),更早的请用日期/关键词缩小范围
+      {view === 'active' && activeData?.hasMore && (
+        <div className="banner" role="status" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>已加载 {activeData.rows.length} / 共 {activeData.matchedTotal} 条命中</span>
+          <button className="mini" onClick={() => setLoaded((n) => n + TX_PAGE_SIZE)}>加载更多</button>
         </div>
       )}
 
