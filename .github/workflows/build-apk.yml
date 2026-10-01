@@ -39,7 +39,8 @@ jobs:
       # AGP 因此必须走 9.2.1 + Gradle 9.4.1 + Kotlin 2.3.0(Gradle 9.4.1 自带);
       # 而 expo 57.0 模板是 AGP 8 惯用法,需要对齐:Kotlin 统一 2.3.0、
       # 移除旧式 kotlin-android 应用(Kotlin 由 AGP 9 内置)、proguard 换 optimize、
-      # expo-module-gradle-plugin 编译依赖升 9.2.1 并迁移移除 API
+      # expo-module-gradle-plugin 编译依赖升 9.2.1 并迁移移除 API。
+      # 具体修补逻辑见 apps/mobile/scripts/patch-expo-agp9.mjs(幂等,自带自检,本地与 CI 共用同一份)
       - name: Align generated android project to AGP 9
         working-directory: apps/mobile
         run: |
@@ -51,84 +52,7 @@ jobs:
           # AGP 9 移除了 proguard-android.txt(含 -dontoptimize)
           sed -i "s/proguard-android\.txt/proguard-android-optimize.txt/g" app/build.gradle
           cd ../..
-          python3 - << 'PY'
-          import os, pathlib, re
-          ws = pathlib.Path(os.environ["GITHUB_WORKSPACE"]) / "node_modules"
-
-          # 内置 gradle 插件 Kotlin 统一 2.3.0 + 迁移废弃 DSL
-          ver = re.compile(r'kotlin\("jvm"\) version "[^"]+"')
-          ser = re.compile(r'kotlin\("plugin.serialization"\) version "[^"]+"')
-          dsl = re.compile(r"kotlinOptions \{(\s*)jvmTarget = JavaVersion\.VERSION_11\.toString\(\)(\s*)\}")
-          for f in ws.glob("**/*.gradle.kts"):
-              s = f.read_text()
-              s2 = ver.sub('kotlin("jvm") version "2.3.0"', s)
-              s2 = ser.sub('kotlin("plugin.serialization") version "2.3.0"', s2)
-              s2 = dsl.sub(r"compilerOptions {\1jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)\2}", s2)
-              if s2 != s:
-                  f.write_text(s2)
-                  print("kts patched:", f)
-
-          # Kotlin 由 AGP 9 内置提供:删除所有旧式 kotlin-android 应用
-          for f in ws.glob("**/android/build.gradle"):
-              s = f.read_text()
-              if 'apply plugin: "kotlin-android"' in s or "apply plugin: 'kotlin-android'" in s:
-                  s = s.replace('apply plugin: "kotlin-android"', "// AGP9 built-in kotlin")
-                  s = s.replace("apply plugin: 'kotlin-android'", "// AGP9 built-in kotlin")
-                  f.write_text(s)
-                  print("groovy patched:", f)
-          for f in ws.glob("**/expo-module-gradle-plugin/src/**/*.kt"):
-              s = f.read_text()
-              if 'plugins.apply("kotlin-android")' in s:
-                  s = s.replace('plugins.apply("kotlin-android")', "// AGP9 built-in kotlin")
-                  f.write_text(s)
-                  print("kt patched:", f)
-
-          # expo-module-gradle-plugin 按 AGP 8.5 编译,无法在 AGP 9.2.1 运行时工作:
-          # 编译依赖升至 9.2.1,并迁移 AGP 9 移除/变动的 API
-          for f in ws.glob("**/expo-module-gradle-plugin/build.gradle.kts"):
-              s = f.read_text()
-              s2 = s.replace('compileOnly("com.android.tools.build:gradle:8.5.0")', 'compileOnly("com.android.tools.build:gradle:9.2.1")')
-              if s2 != s:
-                  f.write_text(s2)
-                  print("agp dep patched:", f)
-          for f in ws.glob("**/expo-module-gradle-plugin/src/**/*.kt"):
-              s = f.read_text()
-              s2 = s.replace("import com.android.build.gradle.LibraryExtension", "import com.android.build.api.dsl.LibraryExtension")
-              s2 = s2.replace("lintOptions.isAbortOnError = false", "lint { abortOnError = false }")
-              s2 = s2.replace("this@defaultConfig.targetSdk = targetSdk", "// AGP 9: library DSL 不再有 targetSdk")
-              if s2 != s:
-                  f.write_text(s2)
-                  print("kt agp9 patched:", f)
-
-          # 4) AGP 9 发布 DSL 变更:publishing singleVariant / versionName 仅 maven 发布
-          #    路径使用,APK 构建走 canBePublished=false 短路,置空使其可编译
-          pub_file = next(ws.glob("**/expo-module-gradle-plugin/src/**/AndroidLibraryExtension.kt"))
-          ps = pub_file.read_text()
-          old_body = (
-            "internal fun LibraryExtension.applyPublishingVariant() {\n"
-            "  publishing { publishing ->\n"
-            "    publishing.singleVariant(\"release\") {\n"
-            "      withSourcesJar()\n"
-            "    }\n"
-            "  }\n"
-            "}"
-          )
-          new_body = (
-            "internal fun LibraryExtension.applyPublishingVariant() {\n"
-            "  // AGP 9 迁移:publishing DSL 已变更;maven 发布路径不在 APK 构建中使用\n"
-            "}"
-          )
-          assert old_body in ps, "publishing body not found"
-          pub_file.write_text(ps.replace(old_body, new_body))
-          pub2 = next(ws.glob("**/expo-module-gradle-plugin/src/**/MavenPublicationExtension.kt"))
-          ms = pub2.read_text()
-          ms = ms.replace(
-            "project.androidLibraryExtension().defaultConfig.versionName",
-            '\"\" /* AGP 9: LibraryDefaultConfig 无 versionName,仅 maven 发布路径 */"'
-          )
-          pub2.write_text(ms)
-          print("publishing patched")
-          PY
+          node scripts/patch-expo-agp9.mjs "$GITHUB_WORKSPACE"
 
       - name: Cache gradle
         uses: actions/cache@v4
