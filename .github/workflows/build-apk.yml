@@ -82,11 +82,13 @@ jobs:
           if-no-files-found: ignore
 
       # 失败时把关键错误行以 check annotation 形式抛出。
-      # 动机:job 日志与 artifact 下载都需要 token(GET .../logs 返回
-      # "Must have admin rights"),而 annotation 可通过公开的
-      # GET /repos/{owner}/{repo}/check-runs/{id}/annotations 匿名读取,
-      # 便于在无凭据环境下定位问题,不必反复手工粘贴日志。
-      # 注意:GitHub 单步最多 10 条 error 级 annotation,故先筛最有信息量的行。
+      # 动机:job 日志、artifact 下载、以及 per-step 日志端点
+      # (/commit/{sha}/checks/{id}/logs/{n}) 全都需要 token,而 annotation 可通过
+      # 公开的 GET /repos/{owner}/{repo}/check-runs/{id}/annotations 匿名读取
+      # (也可直接从 job 页面 HTML 解析),便于在无凭据环境定位问题。
+      # 注意:GitHub 单步上限是 10 条 error + 10 条 warning,故两个通道都用上;
+      # 且必须"优先抓错误本体"——ninja/CMake 日志里 [N/M] 进度行会淹没真正的
+      # clang 诊断,早期的顺序截取就因此把 error: 行挤出了上限。
       - name: Surface gradle error as annotations
         if: failure()
         working-directory: apps/mobile/android
@@ -98,20 +100,34 @@ jobs:
             exit 0
           fi
           {
+            # 1) 最高优先:编译器/链接器的诊断本体 + 其后 6 行上下文
+            grep -m1 -A6 -E '(^|[^A-Za-z])(fatal )?error:' "$LOG" || true
+            # 2) ninja/CMake 失败目标与失败任务
+            grep -m1 -E '^FAILED: ' "$LOG" || true
             grep -m1 -E '^> Task .*FAILED' "$LOG" || true
-            awk '/\* What went wrong/{f=1} f{ if (/^\* Try:/) exit; print }' "$LOG"
-            grep -m2 -E '^(e: |A problem occurred )' "$LOG" || true
-          } 2>/dev/null | sed '/^[[:space:]]*$/d' > err-excerpt.txt || true
-          if [ ! -s err-excerpt.txt ]; then
-            tail -n 6 "$LOG" | sed '/^[[:space:]]*$/d' > err-excerpt.txt
+            # 3) Gradle 摘要(剔除 ninja 进度行噪声,含缩进形式)
+            awk '/\* What went wrong/{f=1} f{ if (/^\* Try:/) exit; print }' "$LOG" \
+              | grep -vE '^[[:space:]]*\[[0-9]+/[0-9]+\] ' || true
+            # 4) Kotlin / 配置期错误
+            grep -m1 -E '^(e: |A problem occurred )' "$LOG" || true
+          } 2>/dev/null | sed '/^[[:space:]]*$/d' > err-all.txt || true
+          if [ ! -s err-all.txt ]; then
+            tail -n 8 "$LOG" | sed '/^[[:space:]]*$/d' > err-all.txt
           fi
+          head -n 8  err-all.txt > err.txt
+          tail -n +9  err-all.txt | head -n 10 > warn.txt
+          n=0
+          while IFS= read -r line; do
+            n=$((n + 1))
+            [ "$n" -gt 8 ] && break
+            echo "::error::$(printf '%s' "$line" | sed 's/%/%25/g; s/\r//g')"
+          done < err.txt
           n=0
           while IFS= read -r line; do
             n=$((n + 1))
             [ "$n" -gt 10 ] && break
-            safe=$(printf '%s' "$line" | sed 's/%/%25/g; s/\r//g')
-            echo "::error::$safe"
-          done < err-excerpt.txt
+            echo "::warning::$(printf '%s' "$line" | sed 's/%/%25/g; s/\r//g')"
+          done < warn.txt
           exit 0
 
       - name: Upload APK
