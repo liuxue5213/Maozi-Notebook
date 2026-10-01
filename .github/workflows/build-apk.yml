@@ -35,48 +35,18 @@ jobs:
         working-directory: apps/mobile
         run: pnpm exec expo prebuild -p android --no-install
 
-      # expo 57.0 模板按 AGP 8 惯用法生成,但依赖矩阵(RN 0.87 catalog)解析到 AGP 9.2.1。
-      # 统一对齐到 AGP 9 + Gradle 9.4.1 + Kotlin 2.3.0(Gradle 9.4.1 自带 Kotlin 2.3.0):
-      # 1) wrapper 升 9.4.1、AGP 钉到 9.2.1;2) 内置插件 Kotlin 统一 2.3.0 并迁移废弃 DSL;
-      # 3) Kotlin 由 AGP 9 内置提供,删除所有旧式 kotlin-android 应用;4) proguard 换 optimize 版
-      - name: Align generated android project to AGP 9
+      # expo 57.0 模板是 AGP 8 惯用法;AGP 不钉版本时会漂移到 9.2.1,与 expo 内置插件
+      # (按 AGP 8.5 编译)不兼容。整体钉回 8.x 测试组合:AGP 8.13 + Gradle 8.14.3,
+      # Kotlin 回落原生 2.1/2.2,无需任何源码补丁
+      - name: Pin AGP 8.13 + Gradle 8.14 (expo template matrix)
         working-directory: apps/mobile
         run: |
           cd android
-          sed -i 's#gradle-[0-9.]*-bin.zip#gradle-9.4.1-bin.zip#' gradle/wrapper/gradle-wrapper.properties
-          sed -i "s/classpath('com.android.tools.build:gradle')/classpath('com.android.tools.build:gradle:9.2.1')/" build.gradle
-          # AGP 9 内置 Kotlin,app 模板里这句会重复注册 'kotlin' 扩展
-          sed -i '/apply plugin: "org.jetbrains.kotlin.android"/d' app/build.gradle
-          sed -i "s/proguard-android\.txt/proguard-android-optimize.txt/g" app/build.gradle
-          cd ../..
-          python3 - << 'PY'
-          import os, pathlib, re
-          ws = pathlib.Path(os.environ["GITHUB_WORKSPACE"]) / "node_modules"
-          ver = re.compile(r'kotlin\("jvm"\) version "[^"]+"')
-          ser = re.compile(r'kotlin\("plugin.serialization"\) version "[^"]+"')
-          dsl = re.compile(r"kotlinOptions \{(\s*)jvmTarget = JavaVersion\.VERSION_11\.toString\(\)(\s*)\}")
-          for f in ws.glob("**/*.gradle.kts"):
-              s = f.read_text()
-              s2 = ver.sub('kotlin("jvm") version "2.3.0"', s)
-              s2 = ser.sub('kotlin("plugin.serialization") version "2.3.0"', s2)
-              s2 = dsl.sub(r"compilerOptions {\1jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)\2}", s2)
-              if s2 != s:
-                  f.write_text(s2)
-                  print("kts patched:", f)
-          for f in ws.glob("**/android/build.gradle"):
-              s = f.read_text()
-              if 'apply plugin: "kotlin-android"' in s or "apply plugin: 'kotlin-android'" in s:
-                  s = s.replace('apply plugin: "kotlin-android"', "// AGP9 built-in kotlin")
-                  s = s.replace("apply plugin: 'kotlin-android'", "// AGP9 built-in kotlin")
-                  f.write_text(s)
-                  print("groovy patched:", f)
-          for f in ws.glob("**/expo-module-gradle-plugin/src/**/*.kt"):
-              s = f.read_text()
-              if 'plugins.apply("kotlin-android")' in s:
-                  s = s.replace('plugins.apply("kotlin-android")', "// AGP9 built-in kotlin")
-                  f.write_text(s)
-                  print("kt patched:", f)
-          PY
+          sed -i 's#gradle-[0-9.]*-bin.zip#gradle-8.14.3-bin.zip#' gradle/wrapper/gradle-wrapper.properties
+          sed -i "s/classpath('com.android.tools.build:gradle:9.2.1')/classpath('com.android.tools.build:gradle:8.13.0')/" build.gradle
+          sed -i "s/classpath('com.android.tools.build:gradle')/classpath('com.android.tools.build:gradle:8.13.0')/" build.gradle
+          grep -E "distributionUrl" gradle/wrapper/gradle-wrapper.properties
+          grep -E "build:gradle" build.gradle
 
       - name: Cache gradle
         uses: actions/cache@v4
