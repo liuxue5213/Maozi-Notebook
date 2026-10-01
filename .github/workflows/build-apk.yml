@@ -35,37 +35,45 @@ jobs:
         working-directory: apps/mobile
         run: pnpm exec expo prebuild -p android --no-install
 
-      # expo prebuild 模板的 wrapper 版本可能落后于 AGP 最低要求(9.4.1),对齐后再构建
-      - name: Align gradle wrapper with AGP requirement
+      # expo 57.0 模板按 AGP 8 惯用法生成,但依赖矩阵(RN 0.87 catalog)解析到 AGP 9.2.1。
+      # 统一对齐到 AGP 9 + Gradle 9.4.1 + Kotlin 2.3.0(Gradle 9.4.1 自带 Kotlin 2.3.0):
+      # 1) wrapper 升 9.4.1、AGP 钉到 9.2.1;2) 内置插件 Kotlin 统一 2.3.0 并迁移废弃 DSL;
+      # 3) Kotlin 由 AGP 9 内置提供,删除所有旧式 kotlin-android 应用;4) proguard 换 optimize 版
+      - name: Align generated android project to AGP 9
         working-directory: apps/mobile
         run: |
           cd android
           sed -i 's#gradle-[0-9.]*-bin.zip#gradle-9.4.1-bin.zip#' gradle/wrapper/gradle-wrapper.properties
-          grep distributionUrl gradle/wrapper/gradle-wrapper.properties
-          # AGP 9.x 内置 Kotlin 支持,模板里旧式 apply kotlin.android 会重复注册 'kotlin' 扩展
-          sed -i '/apply plugin: "org.jetbrains.kotlin.android"/d' app/build.gradle
-          # AGP 9 移除了 proguard-android.txt(含 -dontoptimize),必须用 optimize 版
+          sed -i "s/classpath('com.android.tools.build:gradle')/classpath('com.android.tools.build:gradle:9.2.1')/" build.gradle
           sed -i "s/proguard-android\.txt/proguard-android-optimize.txt/g" app/build.gradle
-
-      # Gradle 9.4.1 自带 Kotlin 2.3.0(lib/kotlin-reflect-2.3.0.jar),expo/RN 内置 gradle 插件
-      # 只要还用旧版 Kotlin 编译就会元数据不兼容(internal compiler error)→ 全部对齐到 2.3.0
-      - name: Align bundled gradle plugins to Kotlin 2.3.0
-        working-directory: apps/mobile
-        run: |
+          cd ../..
           python3 - << 'PY'
           import os, pathlib, re
-          base = pathlib.Path(os.environ["GITHUB_WORKSPACE"]) / "node_modules"
+          ws = pathlib.Path(os.environ["GITHUB_WORKSPACE"]) / "node_modules"
           ver = re.compile(r'kotlin\("jvm"\) version "[^"]+"')
           ser = re.compile(r'kotlin\("plugin.serialization"\) version "[^"]+"')
           dsl = re.compile(r"kotlinOptions \{(\s*)jvmTarget = JavaVersion\.VERSION_11\.toString\(\)(\s*)\}")
-          for f in base.glob("**/*.gradle.kts"):
+          for f in ws.glob("**/*.gradle.kts"):
               s = f.read_text()
               s2 = ver.sub('kotlin("jvm") version "2.3.0"', s)
               s2 = ser.sub('kotlin("plugin.serialization") version "2.3.0"', s2)
               s2 = dsl.sub(r"compilerOptions {\1jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)\2}", s2)
               if s2 != s:
                   f.write_text(s2)
-                  print("patched:", f)
+                  print("kts patched:", f)
+          for f in ws.glob("**/android/build.gradle"):
+              s = f.read_text()
+              if 'apply plugin: "kotlin-android"' in s or "apply plugin: 'kotlin-android'" in s:
+                  s = s.replace('apply plugin: "kotlin-android"', "// AGP9 built-in kotlin")
+                  s = s.replace("apply plugin: 'kotlin-android'", "// AGP9 built-in kotlin")
+                  f.write_text(s)
+                  print("groovy patched:", f)
+          for f in ws.glob("**/expo-module-gradle-plugin/src/**/*.kt"):
+              s = f.read_text()
+              if 'plugins.apply("kotlin-android")' in s:
+                  s = s.replace('plugins.apply("kotlin-android")', "// AGP9 built-in kotlin")
+                  f.write_text(s)
+                  print("kt patched:", f)
           PY
 
       - name: Cache gradle
