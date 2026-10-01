@@ -46,8 +46,23 @@ export async function saveLocal(
   opts: { op?: 'upsert' | 'delete'; deviceId?: string; base?: AnyRow | null } = {},
 ): Promise<void> {
   const { sql, params } = upsertSql(entity, row);
-  await db.runAsync(sql, params);
-  await enqueueChange(db, entity, row, opts.op ?? 'upsert', opts.deviceId, opts.base);
+  if (db.withExclusiveTransactionAsync) {
+    await db.withExclusiveTransactionAsync(async (tx) => {
+      await tx.runAsync(sql, params);
+      await enqueueChange(tx, entity, row, opts.op ?? 'upsert', opts.deviceId, opts.base);
+    });
+    return;
+  }
+  // node:sqlite 测试适配与旧实现:同一连接上显式事务,失败时一起回滚。
+  await db.execAsync('BEGIN IMMEDIATE');
+  try {
+    await db.runAsync(sql, params);
+    await enqueueChange(db, entity, row, opts.op ?? 'upsert', opts.deviceId, opts.base);
+    await db.execAsync('COMMIT');
+  } catch (error) {
+    await db.execAsync('ROLLBACK');
+    throw error;
+  }
 }
 
 export async function enqueueChange(
@@ -148,11 +163,12 @@ export async function listDeadLetters(db: SQLiteLike, limit = 100): Promise<Arra
  */
 export function createRowSink(db: SQLiteLike) {
   return {
-    async applyServerRow(entity: EntityKind, row: AnyRow): Promise<void> {
+    async applyServerRow(entity: EntityKind, row: AnyRow): Promise<boolean> {
       const pending = await db.getAllAsync<{ seq: number }>('SELECT seq FROM outbox WHERE entity_id = ? LIMIT 1', [String(row.id)]);
-      if (pending.length) return;
+      if (pending.length) return false;
       const { sql, params } = upsertSql(entity, row);
       await db.runAsync(sql, params);
+      return true;
     },
     async getCursor(): Promise<number> {
       return Number((await metaGet(db, 'sync_cursor')) ?? 0);

@@ -2,7 +2,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { newId, type CategoryRow } from '@ledgerone/domain';
 import { db } from './db/db';
 import { getActiveLedgerId } from './db/seed';
-import { enqueue } from './sync/wiring';
+import { saveLocal } from './sync/wiring';
 
 /**
  * 分类管理(M03 自定义分类,第 15 轮):新建一级/子分类、重命名、隐藏/显示、删除。
@@ -47,22 +47,19 @@ export function CategoryPanel({ onBack }: { onBack: () => void }) {
       client_version: 1, server_version: null, is_deleted: false, deleted_at: null,
       created_at: Date.now(), updated_at: Date.now(),
     };
-    await db.categories.put(row);
-    enqueue('category', row as unknown as Record<string, unknown>);
+    await saveLocal('category', row as unknown as Record<string, unknown>);
   };
 
   const rename = async (c: CategoryRow): Promise<void> => {
     const name = window.prompt('新的分类名称', c.name);
     if (!name?.trim() || name.trim() === c.name) return;
     const updated: CategoryRow = { ...c, name: name.trim(), client_version: c.client_version + 1, updated_at: Date.now() };
-    await db.categories.put(updated);
-    enqueue('category', updated as unknown as Record<string, unknown>, 'upsert', c as unknown as Record<string, unknown>);
+    await saveLocal('category', updated as unknown as Record<string, unknown>, 'upsert', c as unknown as Record<string, unknown>);
   };
 
   const toggleHidden = async (c: CategoryRow): Promise<void> => {
     const updated: CategoryRow = { ...c, is_hidden: !c.is_hidden, client_version: c.client_version + 1, updated_at: Date.now() };
-    await db.categories.put(updated);
-    enqueue('category', updated as unknown as Record<string, unknown>, 'upsert', c as unknown as Record<string, unknown>);
+    await saveLocal('category', updated as unknown as Record<string, unknown>, 'upsert', c as unknown as Record<string, unknown>);
   };
 
   const remove = async (c: CategoryRow): Promise<void> => {
@@ -76,12 +73,10 @@ export function CategoryPanel({ onBack }: { onBack: () => void }) {
     const tomb = (row: CategoryRow): CategoryRow => ({ ...row, is_deleted: true, deleted_at: now, client_version: row.client_version + 1 });
     for (const k of kids) {
       const row = tomb(k);
-      await db.categories.put(row);
-      enqueue('category', row as unknown as Record<string, unknown>, 'delete');
+      await saveLocal('category', row as unknown as Record<string, unknown>, 'delete');
     }
     const row = tomb(c);
-    await db.categories.put(row);
-    enqueue('category', row as unknown as Record<string, unknown>, 'delete');
+    await saveLocal('category', row as unknown as Record<string, unknown>, 'delete');
   };
 
   const kindSections: Array<{ kind: 'expense' | 'income'; label: string }> = [

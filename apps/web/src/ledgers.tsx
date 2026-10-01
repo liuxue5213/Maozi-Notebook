@@ -2,7 +2,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import type { LedgerRow } from '@ledgerone/domain';
 import { db } from './db/db';
 import { createLedgerLocally } from './db/seed';
-import { enqueue } from './sync/wiring';
+import { saveLocal } from './sync/wiring';
 import { getUserId } from './sync/api';
 
 /**
@@ -34,8 +34,7 @@ export function LedgerPanel({ onBack }: { onBack: () => void }) {
     const name = window.prompt('新的账本名称', l.name);
     if (!name?.trim() || name.trim() === l.name) return;
     const updated: LedgerRow = { ...l, name: name.trim(), client_version: l.client_version + 1, updated_at: Date.now() };
-    await db.ledgers.put(updated);
-    enqueue('ledger', updated as unknown as Record<string, unknown>, 'upsert', l as unknown as Record<string, unknown>);
+    await saveLocal('ledger', updated as unknown as Record<string, unknown>, 'upsert', l as unknown as Record<string, unknown>);
   };
 
   const remove = async (l: LedgerRow): Promise<void> => {
@@ -72,26 +71,23 @@ export function LedgerPanel({ onBack }: { onBack: () => void }) {
     const budgetIds = new Set(budgets.map((b) => b.id));
     const items = budgetItems.filter((i) => budgetIds.has(i.budget_id)); // 预算项经 budget 归属账本
     const purge = async (
-      table: { put: (row: never) => Promise<unknown> },
       rows: Array<{ client_version: number; is_deleted: boolean; deleted_at?: number | null }>,
       entity: 'transaction' | 'account' | 'category' | 'budget' | 'budget_item' | 'recurring_rule' | 'pending_transaction',
     ): Promise<void> => {
       for (const r of rows) {
         const row = mark(r);
-        await table.put(row as never);
-        enqueue(entity, row as unknown as Record<string, unknown>, 'delete');
+        await saveLocal(entity, row as unknown as Record<string, unknown>, 'delete');
       }
     };
-    await purge(db.transactions, txs, 'transaction');
-    await purge(db.accounts, accs, 'account');
-    await purge(db.categories, cats, 'category');
-    await purge(db.budgets, budgets, 'budget');
-    await purge(db.budget_items, items, 'budget_item');
-    await purge(db.recurring_rules, rules, 'recurring_rule');
-    await purge(db.pending_transactions, pendings, 'pending_transaction');
+    await purge(txs, 'transaction');
+    await purge(accs, 'account');
+    await purge(cats, 'category');
+    await purge(budgets, 'budget');
+    await purge(items, 'budget_item');
+    await purge(rules, 'recurring_rule');
+    await purge(pendings, 'pending_transaction');
     const ledgerTomb = mark(l);
-    await db.ledgers.put(ledgerTomb);
-    enqueue('ledger', ledgerTomb as unknown as Record<string, unknown>, 'delete');
+    await saveLocal('ledger', ledgerTomb as unknown as Record<string, unknown>, 'delete');
     if (active === l.id) {
       const rest = ledgers.find((x) => x.id !== l.id);
       if (rest) await switchTo(rest.id);

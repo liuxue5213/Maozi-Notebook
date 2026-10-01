@@ -9,7 +9,8 @@
       "dependsOn": ["^build"]
     },
     "test": {
-      "dependsOn": ["^build"]
+      "dependsOn": ["^build"],
+      "passThroughEnv": ["TEST_MYSQL_URL"]
     },
     "dev": {
       "cache": false,

@@ -8,7 +8,7 @@ import {
 } from '@ledgerone/domain';
 import { db } from './db/db';
 import { getActiveLedgerId } from './db/seed';
-import { enqueue } from './sync/wiring';
+import { saveLocal } from './sync/wiring';
 
 const TYPE_ICONS: Record<AccountType, string> = {
   cash: '💵', debit_card: '💳', credit_card: '💳', wallet: '👛',
@@ -183,8 +183,7 @@ async function repay(creditAccount: AccountRow, amount: string, accounts: Accoun
     created_at: now,
     updated_at: now,
   };
-  await db.transactions.put(tx);
-  enqueue('transaction', tx as unknown as Record<string, unknown>);
+  await saveLocal('transaction', tx as unknown as Record<string, unknown>);
 }
 
 function AccountEditor({ original, onClose }: { original: AccountRow | null; onClose: () => void }) {
@@ -248,8 +247,7 @@ function AccountEditor({ original, onClose }: { original: AccountRow | null; onC
         updated_at: now,
       };
     }
-    await db.accounts.put(row);
-    enqueue('account', row as unknown as Record<string, unknown>);
+    await saveLocal('account', row as unknown as Record<string, unknown>);
     onClose();
   };
 

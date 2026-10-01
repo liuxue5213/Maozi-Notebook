@@ -16,14 +16,14 @@ function getDeviceId(): string {
   return d;
 }
 
-/** 本地写入后入队:所有写操作先落本地库,再异步同步(PRD 5.4 本地为第一写入口) */
-export function enqueue(
+/** 入队必须可等待,调用方可将它与业务写入放在同一 Dexie 事务中。 */
+export async function enqueue(
   entity: EntityKind,
   row: Record<string, unknown>,
   op: 'upsert' | 'delete' = 'upsert',
   base?: Record<string, unknown> | null,
-): void {
-  void db.outbox.add({
+): Promise<void> {
+  await db.outbox.add({
     entity,
     entityId: String(row.id),
     op,
@@ -39,12 +39,28 @@ export function enqueue(
   scheduleSync();
 }
 
-async function applyServerRow(entity: EntityKind, row: Record<string, unknown>): Promise<void> {
+/** 单条业务写入与 outbox 原子提交。 */
+export async function saveLocal(
+  entity: EntityKind,
+  row: Record<string, unknown>,
+  op: 'upsert' | 'delete' = 'upsert',
+  base?: Record<string, unknown> | null,
+): Promise<void> {
+  const table = TABLE_BY_ENTITY[entity];
+  if (!table) throw new Error(`不支持本地写入实体: ${entity}`);
+  await db.transaction('rw', table, db.outbox, async () => {
+    await table.put(row as never);
+    await enqueue(entity, row, op, base);
+  });
+}
+
+async function applyServerRow(entity: EntityKind, row: Record<string, unknown>): Promise<boolean> {
   // 本地存在待推送版本时不覆盖,待上行 ack 后由下次 pull 收敛
   const pending = await db.outbox.where('entityId').equals(String(row.id)).first();
-  if (pending) return;
+  if (pending) return false;
   const table = TABLE_BY_ENTITY[entity];
   if (table) await table.put(row as never);
+  return true;
 }
 
 export const engine = new SyncEngine({
@@ -68,13 +84,18 @@ export const engine = new SyncEngine({
     // 第 19 轮 P0-1 修复:按 op.entity 分发 —— 修复前无条件写 transactions 表,非流水实体
     // (recurring_rule/account 等含同名字段 amount/type)冲突时整行塞进流水表触发白屏。
     if (op.entity !== 'transaction') {
-      console.warn('[sync] 关键字段冲突(非流水实体,保留本地待推送由用户手改,不自动生成副本):', op.entity, op.entityId, conflicts);
+      await db.deadletter.add({
+        entity: op.entity, entityId: op.entityId, op: op.op, payload: op.payload,
+        reason: `关键字段冲突: ${conflicts?.map((c) => c.field).join(', ') ?? '未知字段'}`,
+        at: Date.now(),
+      });
+      console.warn('[sync] 非流水实体冲突已保存到同步诊断:', op.entity, op.entityId, conflicts);
       return;
     }
     const orig = op.payload;
     const copy = {
       ...orig,
-      id: newId(),
+      id: op.seq === undefined ? newId() : `conflict_${op.entityId}_${op.seq}`,
       note: `${(orig.note as string) ?? ''} [冲突副本]`.slice(0, 500),
       client_version: 1,
       server_version: null,
@@ -83,8 +104,11 @@ export const engine = new SyncEngine({
       created_at: Date.now(),
       updated_at: Date.now(),
     };
-    await db.transactions.put(copy as never);
-    enqueue('transaction', copy);
+    await db.transaction('rw', db.transactions, db.outbox, async () => {
+      if (await db.outbox.where('entityId').equals(String(copy.id)).first()) return;
+      await db.transactions.put(copy as never);
+      await enqueue('transaction', copy);
+    });
     console.warn('[sync] 关键字段冲突,已生成冲突副本:', op.entityId, conflicts);
   },
   onDeadLetter: async (op, reason) => {

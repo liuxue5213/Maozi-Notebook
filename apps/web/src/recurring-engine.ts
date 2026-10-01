@@ -52,7 +52,7 @@ export async function runDueRecurring(now = Date.now()): Promise<number> {
       // 同一 Dexie 事务:流水落库、规则推进与两次入队要么全部生效要么全部回滚(修复前两个 put 分离)
       await db.transaction('rw', db.transactions, db.recurring_rules, db.outbox, async () => {
         await db.transactions.put(t);
-        enqueue('transaction', t as unknown as Record<string, unknown>);
+        await enqueue('transaction', t as unknown as Record<string, unknown>);
         const nextAt = nextOccurrence(cur.frequency, cur.interval, cur.next_run_at);
         cur = {
           ...cur,
@@ -62,7 +62,7 @@ export async function runDueRecurring(now = Date.now()): Promise<number> {
           updated_at: Date.now(),
         };
         await db.recurring_rules.put(cur);
-        enqueue('recurring_rule', cur as unknown as Record<string, unknown>);
+        await enqueue('recurring_rule', cur as unknown as Record<string, unknown>);
       });
       generated++;
       guard++;

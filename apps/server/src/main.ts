@@ -53,7 +53,7 @@ async function main(): Promise<void> {
   void runMaintenance();
   setInterval(() => void runMaintenance(), 6 * 60 * 60 * 1000).unref();
 
-  // 优雅停机(第 5 轮运维发现:PGlite 被 SIGKILL 后库文件无法再打开):SIGTERM/SIGINT 收尾落盘
+  // 优雅停机:SIGTERM/SIGINT 关闭 Nest 与 MySQL 连接池
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`[ledgerone] 收到 ${signal},优雅停机…`);
     try {

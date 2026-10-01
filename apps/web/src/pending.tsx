@@ -7,7 +7,7 @@ import {
 } from '@ledgerone/domain';
 import { db } from './db/db';
 import { getActiveLedgerId } from './db/seed';
-import { enqueue } from './sync/wiring';
+import { saveLocal } from './sync/wiring';
 import { defaultMapping, detectSource, findHeaderLineIndex, parseCsv, type ColumnMapping, decodeCsvText } from './utils/import-csv';
 
 /** 待确认池(P08,M05-F04)+ 账单文件导入向导(M05-F01/F02/F05) */
@@ -110,18 +110,15 @@ async function confirmOne(p: PendingTransactionRow, categoryId: string | null, a
     created_at: now,
     updated_at: now,
   };
-  await db.transactions.put(tx);
-  enqueue('transaction', tx as unknown as Record<string, unknown>);
+  await saveLocal('transaction', tx as unknown as Record<string, unknown>);
   const done: PendingTransactionRow = { ...p, status: 'confirmed', client_version: p.client_version + 1, updated_at: now };
-  await db.pending_transactions.put(done);
-  enqueue('pending_transaction', done as unknown as Record<string, unknown>);
+  await saveLocal('pending_transaction', done as unknown as Record<string, unknown>);
 }
 
 async function markStatus(p: PendingTransactionRow, status: 'ignored'): Promise<void> {
   const now = Date.now();
   const row: PendingTransactionRow = { ...p, status, client_version: p.client_version + 1, updated_at: now };
-  await db.pending_transactions.put(row);
-  enqueue('pending_transaction', row as unknown as Record<string, unknown>);
+  await saveLocal('pending_transaction', row as unknown as Record<string, unknown>);
 }
 
 /** 简单自动分类:商户/备注含分类名,或命中父分类关键词(规则引擎端侧简化,M05-F03);优先更具体(二级) */
@@ -305,8 +302,7 @@ function ImportWizard({ onClose, txs }: { onClose: () => void; txs: TransactionR
         created_at: now,
         updated_at: now,
       };
-      await db.pending_transactions.put(p);
-      enqueue('pending_transaction', p as unknown as Record<string, unknown>);
+      await saveLocal('pending_transaction', p as unknown as Record<string, unknown>);
       fresh.push(p);
     }
     if (!opts.silent) {
@@ -523,8 +519,7 @@ function TextImportModal({ onClose }: { onClose: () => void }) {
         created_at: now,
         updated_at: now,
       };
-      await db.pending_transactions.put(p);
-      enqueue('pending_transaction', p as unknown as Record<string, unknown>);
+      await saveLocal('pending_transaction', p as unknown as Record<string, unknown>);
       fresh.push(p);
       written++;
     }

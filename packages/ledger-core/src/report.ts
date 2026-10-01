@@ -101,7 +101,7 @@ export interface ReportModel {
 export interface ReportModelInput {
   /** 已按账本作用域 + 周期区间过滤的行(端侧取数,core 不感知 Dexie/SQLite) */
   rows: TransactionRow[];
-  /** 全量支出(月底预测的近 3 月历史 + 当月已花基线) */
+  /** 当前账本近 3 个完整月及本月的支出(月底预测与当月已花基线) */
   allExpenses: TransactionRow[];
   cats: CategoryRow[];
   kind: 'expense' | 'income';

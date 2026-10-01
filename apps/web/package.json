@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run tests",
     "preview": "vite preview",
-    "e2e": "pnpm --filter @ledgerone/server build && rm -rf ../server/e2e-data && playwright test"
+    "e2e": "pnpm --filter @ledgerone/server build && node ../server/scripts/ensure-e2e-db.mjs && playwright test"
   },
   "dependencies": {
     "@ledgerone/domain": "workspace:*",

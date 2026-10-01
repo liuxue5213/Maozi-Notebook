@@ -10,7 +10,7 @@ import {
 import { buildBudgetModel, type BudgetModel } from '@ledgerone/ledger-core';
 import { db } from './db/db';
 import { getActiveLedgerId } from './db/seed';
-import { enqueue } from './sync/wiring';
+import { saveLocal } from './sync/wiring';
 import { categoryFreq } from './state/freq';
 import { periodRange } from './utils/period';
 
@@ -159,8 +159,7 @@ function BudgetModal({
         updated_at: now,
       };
     }
-    await db.budgets.put(row);
-    enqueue('budget', row as unknown as Record<string, unknown>);
+    await saveLocal('budget', row as unknown as Record<string, unknown>);
 
     // 分类条目 diff:新填/改额 → upsert;清空 → 软删除
     for (const cat of topCats) {
@@ -169,8 +168,7 @@ function BudgetModal({
       if (draft === '') {
         if (existing) {
           const del: BudgetItemRow = { ...existing, is_deleted: true, deleted_at: now, client_version: existing.client_version + 1, updated_at: now };
-          await db.budget_items.put(del);
-          enqueue('budget_item', del as unknown as Record<string, unknown>, 'delete');
+          await saveLocal('budget_item', del as unknown as Record<string, unknown>, 'delete');
         }
         continue;
       }
@@ -178,8 +176,7 @@ function BudgetModal({
       if (existing) {
         if (existing.amount === draft) continue;
         const upd: BudgetItemRow = { ...existing, amount: draft, client_version: existing.client_version + 1, updated_at: now };
-        await db.budget_items.put(upd);
-        enqueue('budget_item', upd as unknown as Record<string, unknown>);
+        await saveLocal('budget_item', upd as unknown as Record<string, unknown>);
       } else {
         const item: BudgetItemRow = {
           id: newId(),
@@ -194,8 +191,7 @@ function BudgetModal({
           created_at: now,
           updated_at: now,
         };
-        await db.budget_items.put(item);
-        enqueue('budget_item', item as unknown as Record<string, unknown>);
+        await saveLocal('budget_item', item as unknown as Record<string, unknown>);
       }
     }
     onClose();
@@ -206,12 +202,10 @@ function BudgetModal({
     if (!window.confirm('删除本月预算(含分类额度)?')) return;
     const now = Date.now();
     const row: BudgetRow = { ...original, is_deleted: true, deleted_at: now, client_version: original.client_version + 1, updated_at: now };
-    await db.budgets.put(row);
-    enqueue('budget', row as unknown as Record<string, unknown>, 'delete');
+    await saveLocal('budget', row as unknown as Record<string, unknown>, 'delete');
     for (const it of originalItems) {
       const del: BudgetItemRow = { ...it, is_deleted: true, deleted_at: now, client_version: it.client_version + 1, updated_at: now };
-      await db.budget_items.put(del);
-      enqueue('budget_item', del as unknown as Record<string, unknown>, 'delete');
+      await saveLocal('budget_item', del as unknown as Record<string, unknown>, 'delete');
     }
     onClose();
   };

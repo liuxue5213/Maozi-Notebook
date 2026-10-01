@@ -11,7 +11,8 @@ export interface ChangeQueue {
 
 /** 服务端下行的落地适配:字段级守卫(有本地待推送版本时跳过服务端覆盖)由实现方处理 */
 export interface RowSink {
-  applyServerRow(entity: EntityKind, row: Record<string, unknown>): Promise<void>;
+  /** 返回 false 表示本地待推送版本阻止了落地;引擎不得跨过该行推进游标。 */
+  applyServerRow(entity: EntityKind, row: Record<string, unknown>): Promise<boolean | void>;
   getCursor(): Promise<number>;
   setCursor(cursor: number): Promise<void>;
 }
@@ -63,19 +64,9 @@ export class SyncEngine {
     this.running = true;
     try {
       this.emit({ state: 'syncing', lastError: null });
-      // push 失败不阻断 pull(可先把服务端下行落地,本地队列留在 outbox 下轮重试)
-      let firstError: unknown = null;
-      try {
-        await this.pushAll();
-      } catch (e) {
-        firstError = e;
-      }
-      try {
-        await this.pullAll();
-      } catch (e) {
-        firstError = firstError ?? e;
-      }
-      if (firstError) throw firstError;
+      // 上行未定案时不能推进下行游标:待推送行会被 RowSink 跳过,之后可能永久漏拉。
+      await this.pushAll();
+      await this.pullAll();
       this.emit({ state: 'idle', lastSyncAt: Date.now() });
     } catch (e) {
       this.emit({ state: 'error', lastError: e instanceof Error ? e.message : String(e) });
@@ -92,16 +83,20 @@ export class SyncEngine {
       const res = await this.deps.transport.push(batch);
       const ackSeq: number[] = [];
       // 服务端按上行顺序返回结果(见 apps/server sync.service)
-      res.results.forEach((r, i) => {
+      if (res.results.length !== batch.length) throw new Error('服务端同步结果数量与上行批次不一致');
+      for (const [i, r] of res.results.entries()) {
         const op = batch[i];
-        if (op.seq !== undefined) ackSeq.push(op.seq);
-        if (r.status === 'conflict' && this.deps.onPushConflict && r.conflicts?.length) {
-          void this.deps.onPushConflict(op, r.conflicts);
+        if (r.entityId !== op.entityId) throw new Error('服务端同步结果与上行顺序不一致');
+        if (r.status === 'conflict') {
+          if (!this.deps.onPushConflict) throw new Error('缺少同步冲突处理器');
+          await this.deps.onPushConflict(op, r.conflicts);
         }
         if (r.status === 'rejected') {
-          void this.deps.onDeadLetter?.(op, r.reason);
+          if (!this.deps.onDeadLetter) throw new Error('缺少同步死信处理器');
+          await this.deps.onDeadLetter(op, r.reason);
         }
-      });
+        if (op.seq !== undefined) ackSeq.push(op.seq);
+      }
       // applied/noop/stale/conflict/rejected 均视为「本轮已定案」出队;rejected 已死信隔离
       await this.deps.queue.ack(ackSeq);
       await this.refreshPending();
@@ -112,8 +107,13 @@ export class SyncEngine {
     for (;;) {
       const cursor = await this.deps.sink.getCursor();
       const res: PullResponse = await this.deps.transport.pull(cursor, this.deps.pullBatchSize ?? 500);
+      let safeCursor = cursor;
       for (const { entity, row } of res.rows) {
-        await this.deps.sink.applyServerRow(entity, row);
+        if (await this.deps.sink.applyServerRow(entity, row) === false) {
+          await this.deps.sink.setCursor(safeCursor);
+          return;
+        }
+        safeCursor = Number(row.server_version ?? safeCursor);
       }
       await this.deps.sink.setCursor(res.cursor);
       if (!res.hasMore) break;

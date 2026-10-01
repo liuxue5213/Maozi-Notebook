@@ -18,6 +18,10 @@ const CODE_LOCK_MS = 15 * 60_000; // F-06:锁定 15 分钟(锁定期内禁止校
 const LOGIN_MAX_ATTEMPTS = 5; // P1-11:邮箱登录按账号 5 次失败锁定(同 F-06 语义)
 const LOGIN_LOCK_MS = 15 * 60_000;
 
+function affected(result: unknown): boolean {
+  return Number((result as [{ affectedRows?: number }])[0]?.affectedRows ?? 0) > 0;
+}
+
 export interface TokenPair {
   accessToken: string;
   refreshToken: string;
@@ -58,114 +62,95 @@ export class AuthService {
    * 生产接入真实短信通道(I01),开发态 DEV_MODE 直接返回便于联调。
    */
   async sendCode(phone: string): Promise<{ devCode?: string }> {
-    const now = Date.now();
-    const last = (await db.select().from(s.phone_codes).where(eq(s.phone_codes.phone, phone)).limit(1))[0];
-    if (last && Number(last.locked_until) > now) {
-      logAudit({ action: 'auth.code.send_locked', target: maskPhone(phone), summary: { lockedUntil: Number(last.locked_until) } });
-      throw new AppError('auth.code.423', 423, `尝试次数过多,请 ${Math.ceil((Number(last.locked_until) - now) / 60_000)} 分钟后再试`);
-    }
-    if (last && now - Number(last.last_sent_at) < CODE_RESEND_COOLDOWN_MS) {
-      throw new AppError('auth.code.429', 429, '发送过于频繁,请 60 秒后再试');
-    }
     const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
     const codeHash = this.codeDigest(phone, code);
-    await db
-      .insert(s.phone_codes)
-      .values({ phone, code_hash: codeHash, attempts: 0, last_sent_at: now, expires_at: now + CODE_TTL_MS, used: false, created_at: now })
-      .onConflictDoUpdate({
-        target: s.phone_codes.phone,
-        // 不写 locked_until:重发不得清除已有的锁定
-        set: { code_hash: codeHash, attempts: 0, last_sent_at: now, expires_at: now + CODE_TTL_MS, used: false },
-      });
+    const outcome = await db.transaction(async (tx) => {
+      // 先确保同一手机号有可锁定的行;并发首次发送也由唯一键串行化。
+      await tx.insert(s.phone_codes)
+        .values({ phone, code_hash: '', attempts: 0, last_sent_at: 0, expires_at: 0, used: true, created_at: Date.now() })
+        .onDuplicateKeyUpdate({ set: { phone: sql`${s.phone_codes.phone}` } });
+      const last = (await tx.select().from(s.phone_codes).where(eq(s.phone_codes.phone, phone)).for('update'))[0];
+      const now = Date.now();
+      if (Number(last.locked_until) > now) return { status: 'locked' as const, until: Number(last.locked_until) };
+      if (now - Number(last.last_sent_at) < CODE_RESEND_COOLDOWN_MS) return { status: 'cooldown' as const };
+      await tx.update(s.phone_codes).set({ code_hash: codeHash, attempts: 0, last_sent_at: now, expires_at: now + CODE_TTL_MS, used: false }).where(eq(s.phone_codes.phone, phone));
+      return { status: 'sent' as const };
+    });
+    if (outcome.status === 'locked') {
+      logAudit({ action: 'auth.code.send_locked', target: maskPhone(phone), summary: { lockedUntil: outcome.until } });
+      throw new AppError('auth.code.423', 423, `尝试次数过多,请 ${Math.ceil((outcome.until - Date.now()) / 60_000)} 分钟后再试`);
+    }
+    if (outcome.status === 'cooldown') throw new AppError('auth.code.429', 429, '发送过于频繁,请 60 秒后再试');
     return env.DEV_MODE && !env.IS_PROD ? { devCode: code } : {};
   }
 
   async login(input: { email?: string; password?: string; phone?: string; code?: string }): Promise<TokenPair> {
     if (input.email && input.password) {
       const email = input.email.trim().toLowerCase();
-      // P1-11:按账号失败锁定(全局限流按 IP,挡不住多 IP 针对单账号撞库)
-      const now = Date.now();
-      const lock = (await db.select().from(s.login_locks).where(eq(s.login_locks.email, email)).limit(1))[0];
-      if (lock && Number(lock.locked_until) > now) {
-        logAudit({ action: 'auth.login.locked', target: maskEmail(email), summary: { phase: 'refused' } });
-        throw new AppError('auth.login.423', 423, `尝试次数过多,请 ${Math.ceil((Number(lock.locked_until) - now) / 60_000)} 分钟后再试`);
-      }
       const u = (await db.select().from(s.users).where(eq(s.users.email, email)).limit(1))[0];
-      if (!u?.password_hash || !(await verifyPassword(input.password, u.password_hash))) {
-        // 原子自增失败计数,达阈值写锁定(与 F-06 验证码同语义)
-        const t = Date.now();
-        const rows = await db
-          .update(s.login_locks)
-          .set({
-            attempts: sql`${s.login_locks.attempts} + 1`,
-            locked_until: sql`CASE WHEN ${s.login_locks.attempts} + 1 >= ${LOGIN_MAX_ATTEMPTS} THEN ${t + LOGIN_LOCK_MS} ELSE ${s.login_locks.locked_until} END`,
-            updated_at: t,
-          })
-          .where(eq(s.login_locks.email, email))
-          .returning({ attempts: s.login_locks.attempts, locked_until: s.login_locks.locked_until });
-        const cur =
-          rows[0] ??
-          (
-            await db
-              .insert(s.login_locks)
-              .values({ email, attempts: 1, locked_until: 0, updated_at: t })
-              .onConflictDoUpdate({ target: s.login_locks.email, set: { attempts: 1, updated_at: t } })
-              .returning({ attempts: s.login_locks.attempts, locked_until: s.login_locks.locked_until })
-          )[0];
-        logAudit({ action: 'auth.login.failed', target: maskEmail(email), summary: { reason: 'bad_credentials', attempts: cur?.attempts ?? 1 } });
-        if (Number(cur?.locked_until ?? 0) > t) {
-          logAudit({ action: 'auth.login.locked', target: maskEmail(email), summary: { phase: 'lock_created', attempts: cur?.attempts } });
-          throw new AppError('auth.login.423', 423, '尝试次数过多,请 15 分钟后再试');
+      const valid = !!u?.password_hash && await verifyPassword(input.password, u.password_hash);
+      // 密码计算在锁外完成;成功与失败都在持有同一账号行锁后重新检查锁定状态。
+      const outcome = await db.transaction(async (tx) => {
+        const now = Date.now();
+        await tx.insert(s.login_locks)
+          .values({ email, attempts: 0, locked_until: 0, updated_at: now })
+          .onDuplicateKeyUpdate({ set: { email: sql`${s.login_locks.email}` } });
+        const lock = (await tx.select().from(s.login_locks).where(eq(s.login_locks.email, email)).for('update'))[0];
+        if (Number(lock.locked_until) > now) return { status: 'locked' as const, until: Number(lock.locked_until), attempts: lock.attempts };
+        if (valid) {
+          await tx.delete(s.login_locks).where(eq(s.login_locks.email, email));
+          return { status: 'ok' as const };
         }
+        const attempts = lock.attempts + 1;
+        const until = attempts >= LOGIN_MAX_ATTEMPTS ? now + LOGIN_LOCK_MS : 0;
+        await tx.update(s.login_locks).set({ attempts, locked_until: until, updated_at: now }).where(eq(s.login_locks.email, email));
+        return { status: until ? 'new_lock' as const : 'failed' as const, until, attempts };
+      });
+      if (outcome.status === 'locked' || outcome.status === 'new_lock') {
+        if (outcome.status === 'new_lock') logAudit({ action: 'auth.login.failed', target: maskEmail(email), summary: { reason: 'bad_credentials', attempts: outcome.attempts } });
+        logAudit({ action: 'auth.login.locked', target: maskEmail(email), summary: { phase: outcome.status === 'locked' ? 'refused' : 'lock_created', attempts: outcome.attempts } });
+        throw new AppError('auth.login.423', 423, `尝试次数过多,请 ${Math.ceil((outcome.until - Date.now()) / 60_000)} 分钟后再试`);
+      }
+      if (outcome.status === 'failed') {
+        logAudit({ action: 'auth.login.failed', target: maskEmail(email), summary: { reason: 'bad_credentials', attempts: outcome.attempts } });
         throw new AppError('auth.login.401', 401, '邮箱或密码错误');
       }
-      // 成功登录:清失败计数
-      await db.delete(s.login_locks).where(eq(s.login_locks.email, email));
       return this.issue(u.id);
     }
     if (input.phone && input.code) {
-      const now = Date.now();
-      const rec = (
-        await db.select().from(s.phone_codes).where(eq(s.phone_codes.phone, input.phone)).limit(1)
-      )[0];
-      if (!rec) throw new AppError('auth.code.401', 401, '验证码错误或已过期');
-      // 锁定期内直接拒绝校验:否则「每 60s 重发一次」就能把 5 次锁定架空成 60s 锁定(F-06 核心)
-      if (Number(rec.locked_until) > now) {
-        logAudit({ action: 'auth.code.locked', target: maskPhone(input.phone), summary: { phase: 'verify_refused' } });
-        throw new AppError('auth.code.423', 423, `尝试次数过多,请 ${Math.ceil((Number(rec.locked_until) - now) / 60_000)} 分钟后再试`);
-      }
+      const phone = input.phone;
       const expect = Buffer.from(this.codeDigest(input.phone, input.code), 'hex');
-      const got = Buffer.from(rec.code_hash, 'hex');
-      const ok = expect.length === got.length && timingSafeEqual(expect, got);
-      if (!ok || rec.used || now > Number(rec.expires_at)) {
-        // P1-12:失败计数改为单条原子 UPDATE 自增(修复前 JS 读-改-写,并发可绕过 5 次锁定)
-        const rows = await db
-          .update(s.phone_codes)
-          .set({
-            attempts: sql`${s.phone_codes.attempts} + 1`,
-            locked_until: sql`CASE WHEN ${s.phone_codes.attempts} + 1 >= ${CODE_MAX_ATTEMPTS} THEN ${now + CODE_LOCK_MS} ELSE ${s.phone_codes.locked_until} END`,
-          })
-          .where(eq(s.phone_codes.phone, input.phone))
-          .returning({ attempts: s.phone_codes.attempts, locked_until: s.phone_codes.locked_until });
-        const attempts = rows[0]?.attempts ?? rec.attempts + 1;
-        const lock = Number(rows[0]?.locked_until ?? rec.locked_until);
-        logAudit({ action: 'auth.code.verify_failed', target: maskPhone(input.phone), summary: { attempts } });
-        if (lock > now) {
-          logAudit({ action: 'auth.code.locked', target: maskPhone(input.phone), summary: { phase: 'lock_created', attempts } });
-          throw new AppError('auth.code.423', 423, `尝试次数过多,请 ${Math.ceil((lock - now) / 60_000)} 分钟后再试`);
+      const outcome = await db.transaction(async (tx) => {
+        const rec = (await tx.select().from(s.phone_codes).where(eq(s.phone_codes.phone, phone)).for('update'))[0];
+        const now = Date.now();
+        if (!rec) return { status: 'missing' as const };
+        if (Number(rec.locked_until) > now) return { status: 'locked' as const, until: Number(rec.locked_until) };
+        if (rec.used) return { status: 'replay' as const };
+        const got = Buffer.from(rec.code_hash, 'hex');
+        const ok = expect.length === got.length && timingSafeEqual(expect, got);
+        if (!ok || now > Number(rec.expires_at)) {
+          const attempts = rec.attempts + 1;
+          const until = attempts >= CODE_MAX_ATTEMPTS ? now + CODE_LOCK_MS : 0;
+          await tx.update(s.phone_codes).set({ attempts, locked_until: until }).where(eq(s.phone_codes.phone, phone));
+          return { status: until ? 'new_lock' as const : 'failed' as const, attempts, until };
         }
+        await tx.update(s.phone_codes).set({ used: true, attempts: 0, locked_until: 0 }).where(eq(s.phone_codes.phone, phone));
+        return { status: 'ok' as const };
+      });
+      if (outcome.status === 'locked' || outcome.status === 'new_lock') {
+        if (outcome.status === 'new_lock') logAudit({ action: 'auth.code.verify_failed', target: maskPhone(phone), summary: { attempts: outcome.attempts } });
+        logAudit({ action: 'auth.code.locked', target: maskPhone(phone), summary: { phase: outcome.status === 'locked' ? 'verify_refused' : 'lock_created', attempts: 'attempts' in outcome ? outcome.attempts : undefined } });
+        throw new AppError('auth.code.423', 423, `尝试次数过多,请 ${Math.ceil((outcome.until - Date.now()) / 60_000)} 分钟后再试`);
+      }
+      if (outcome.status === 'failed') {
+        logAudit({ action: 'auth.code.verify_failed', target: maskPhone(phone), summary: { attempts: outcome.attempts } });
         throw new AppError('auth.code.401', 401, '验证码错误或已过期');
       }
-      // 校验成功:一次性消费(P1-12:条件更新 used=false → 已用即拒绝,并发重放只有一方成功)
-      const consumed = await db
-        .update(s.phone_codes)
-        .set({ used: true, attempts: 0, locked_until: 0 })
-        .where(and(eq(s.phone_codes.phone, input.phone), eq(s.phone_codes.used, false)))
-        .returning({ phone: s.phone_codes.phone });
-      if (!consumed.length) {
-        logAudit({ action: 'auth.code.replay', target: maskPhone(input.phone) });
+      if (outcome.status === 'replay') {
+        logAudit({ action: 'auth.code.replay', target: maskPhone(phone) });
         throw new AppError('auth.code.401', 401, '验证码已使用');
       }
+      if (outcome.status === 'missing') throw new AppError('auth.code.401', 401, '验证码错误或已过期');
       let u = (await db.select().from(s.users).where(eq(s.users.phone, input.phone)).limit(1))[0];
       if (!u) {
         const id = newId();
@@ -206,9 +191,8 @@ export class AuthService {
     const rotated = await db
       .update(s.refresh_tokens)
       .set({ revoked_at: Date.now() })
-      .where(and(eq(s.refresh_tokens.id, row.id), isNull(s.refresh_tokens.revoked_at)))
-      .returning({ id: s.refresh_tokens.id });
-    if (!rotated.length) {
+      .where(and(eq(s.refresh_tokens.id, row.id), isNull(s.refresh_tokens.revoked_at)));
+    if (!affected(rotated)) {
       await db
         .update(s.refresh_tokens)
         .set({ revoked_at: Date.now() })

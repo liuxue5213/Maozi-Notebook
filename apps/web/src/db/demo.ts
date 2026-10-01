@@ -1,7 +1,7 @@
 import { newId, type TransactionRow } from '@ledgerone/domain';
 import { db } from './db';
 import { getActiveLedgerId } from './seed';
-import { enqueue } from '../sync/wiring';
+import { saveLocal } from '../sync/wiring';
 
 /** 确定性伪随机(演示数据可复现) */
 function mulberry32(seed: number): () => number {
@@ -65,8 +65,7 @@ export async function seedDemoData(): Promise<number> {
   }
   // 演示数据同样走 outbox:保证「离线记账 → 登录」全链路与真实路径一致
   for (const t of txs) {
-    await db.transactions.put(t);
-    enqueue('transaction', t as unknown as Record<string, unknown>);
+    await saveLocal('transaction', t as unknown as Record<string, unknown>);
   }
   return txs.length;
 }

@@ -1,7 +1,7 @@
 import type { SyncTransport } from '@ledgerone/domain';
 import { SyncEngine, startAutoSync, type SyncEngineSnapshot } from '@ledgerone/sync';
 import { addDeadLetter, createChangeQueue, createRowSink, saveLocal, type AnyRow } from '@ledgerone/sqlite-sync';
-import { newId, type TransactionRow } from '@ledgerone/domain';
+import { newId, type ChangeOp, type TransactionRow } from '@ledgerone/domain';
 import { AppState } from 'react-native';
 import { db } from './db';
 import { getAccessToken, makeTransport } from './api';
@@ -13,16 +13,17 @@ async function transport(): Promise<SyncTransport> {
 }
 
 /** 关键字段冲突 → 生成「冲突副本」双版本并存(PRD 5.5);第 19 轮 P0-1:仅流水实体,其余不自动副本 */
-async function onPushConflict(op: { entity?: string; payload: Record<string, unknown> }, conflicts?: Array<{ field: string }>): Promise<void> {
+async function onPushConflict(op: ChangeOp, conflicts?: Array<{ field: string }>): Promise<void> {
   if (op.entity !== 'transaction') {
-    console.warn('[sync] 关键字段冲突(非流水实体,不自动生成副本):', op.entity, conflicts);
+    await addDeadLetter(db, op, `关键字段冲突: ${conflicts?.map((c) => c.field).join(', ') ?? '未知字段'}`);
+    console.warn('[sync] 非流水实体冲突已保存到同步诊断:', op.entity, conflicts);
     return;
   }
   const orig = op.payload as Partial<TransactionRow>;
   const now = Date.now();
   const copy: AnyRow = {
     ...orig,
-    id: newId(),
+    id: op.seq === undefined ? newId() : `conflict_${op.entityId}_${op.seq}`,
     note: `${orig.note ?? ''} [冲突副本]`.slice(0, 500),
     client_version: 1,
     server_version: null,
@@ -31,7 +32,8 @@ async function onPushConflict(op: { entity?: string; payload: Record<string, unk
     created_at: now,
     updated_at: now,
   };
-  await saveLocal(db, 'transaction', copy);
+  const queued = await db.getAllAsync<{ seq: number }>('SELECT seq FROM outbox WHERE entity_id = ? LIMIT 1', [String(copy.id)]);
+  if (!queued.length) await saveLocal(db, 'transaction', copy);
 }
 
 export const engine = new SyncEngine({
@@ -41,7 +43,7 @@ export const engine = new SyncEngine({
   },
   queue: createChangeQueue(db),
   sink: createRowSink(db),
-  onPushConflict: onPushConflict as never,
+  onPushConflict,
   // 服务端 rejected 的 op:落死信表(B5/N1,与 Web 端对齐),不再重试也不再静默丢弃
   onDeadLetter: async (op, reason) => {
     await addDeadLetter(db, op, reason);

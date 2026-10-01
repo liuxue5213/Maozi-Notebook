@@ -63,6 +63,16 @@ describe('P0-3/P0-4:明细窗口加载(双下推 + 增量分页)', () => {
     expect(w.hasMore).toBe(false);
   });
 
+  it('无日期筛选时按发生时间排序,不受主键顺序影响', async () => {
+    await seed();
+    const { db } = await import('../src/db/db');
+    const { loadTxWindow } = await import('../src/utils/tx-list');
+    await db.transactions.put({ ...tx(0), id: 'zz-old', happened_at: BASE - D });
+    const w = await loadTxWindow(db.transactions, EMPTY, new Map(), 'l1', 1);
+    expect(w.rows[0].id).toBe('t0599');
+    expect(w.matchedTotal).toBe(N + 1);
+  });
+
   it('修复核心:首个 50 条之外的老流水(bulk-0010,第 11 新)关键词可命中(修复前 limit 截断后搜不到)', async () => {
     await seed();
     const { db } = await import('../src/db/db');

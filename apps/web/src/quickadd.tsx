@@ -8,7 +8,7 @@ import {
 import { db } from './db/db';
 import { getActiveLedgerId } from './db/seed';
 import { getBaseCurrency } from './sync/api';
-import { enqueue } from './sync/wiring';
+import { saveLocal } from './sync/wiring';
 import { getUserId } from './sync/api';
 import { evaluateExpression } from './calc/evaluator';
 import { bumpCategory, categoryFreq } from './state/freq';
@@ -162,8 +162,7 @@ export function QuickAdd({ onNeedAuth }: { onNeedAuth?: () => void }) {
       created_at: now,
       updated_at: now,
     };
-    await db.transactions.put(tx);
-    enqueue('transaction', tx as unknown as Record<string, unknown>); // 本地写入即入队,同步在后台(PRD 流程 A)
+    await saveLocal('transaction', tx as unknown as Record<string, unknown>); // 本地写入即入队,同步在后台(PRD 流程 A)
     if (tx.category_id) {
       bumpCategory(tx.category_id);
       setFreqTick((t) => t + 1);

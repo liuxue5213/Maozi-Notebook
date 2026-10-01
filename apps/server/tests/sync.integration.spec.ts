@@ -1,16 +1,17 @@
 /**
  * 服务端同步/鉴权集成测试(上线前全检 B8):
- * 使用 B7 产出的版本化迁移 SQL 在内存 PGlite 上建库,直测服务层,
+ * 使用独立 MySQL 临时数据库和版本化迁移,直测服务层,
  * 覆盖:引导播种、幂等重放、并发双改(B4)、毒丸批次(B5)、越权 403(B3)、删除幂等、pull 游标推进。
  */
-import { readFileSync, readdirSync } from 'node:fs';
+import mysql from 'mysql2/promise';
 import { eq, sql } from 'drizzle-orm';
-import path from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-process.env.DATABASE_URL = 'pglite://memorydb';
 process.env.NODE_ENV = 'test';
 process.env.DEV_MODE = 'true'; // 测试需要回显 devCode(服务端生产环境由 fail-fast 禁止)
+const adminUrl = process.env.TEST_MYSQL_URL ?? 'mysql://root:test-root@127.0.0.1:3306/mysql';
+const testDbName = `ledgerone_test_${process.pid}_${Date.now()}`;
+let admin: mysql.Connection;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let db: any;
@@ -18,20 +19,15 @@ let authService: import('../src/auth/auth.service').AuthService;
 let syncService: import('../src/sync/sync.service').SyncService;
 
 beforeAll(async () => {
-  // 1) 版本化迁移即测试基线(验证 B7 迁移 SQL 可从零建库)
-  const drizzleDir = path.resolve(process.cwd(), 'drizzle');
-  const sqlFiles = readdirSync(drizzleDir).filter((f) => f.endsWith('.sql')).sort();
-
-  // 2) env 先于模块加载设定,再动态引入
+  admin = await mysql.createConnection(adminUrl);
+  await admin.query(`CREATE DATABASE \`${testDbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+  const testUrl = new URL(adminUrl);
+  testUrl.pathname = `/${testDbName}`;
+  process.env.DATABASE_URL = testUrl.toString();
   const dbMod = await import('../src/db/db');
   db = dbMod.db;
-  const { sql } = await import('drizzle-orm');
-  for (const f of sqlFiles) {
-    for (const stmt of readFileSync(path.join(drizzleDir, f), 'utf8').split('--> statement-breakpoint')) {
-      const s = stmt.trim();
-      if (s) await db.execute(sql.raw(s));
-    }
-  }
+  await dbMod.runMigrations();
+  await dbMod.runMigrations(); // 增量启动必须幂等
   const { AuthService } = await import('../src/auth/auth.service');
   const { SyncService } = await import('../src/sync/sync.service');
   authService = new AuthService();
@@ -40,6 +36,14 @@ beforeAll(async () => {
   const { ensureGlobalSeq } = await import('../src/db/bootstrap');
   await ensureGlobalSeq();
 }, 60000);
+
+afterAll(async () => {
+  if (!admin) return;
+  const { closeDb } = await import('../src/db/db');
+  await closeDb();
+  await admin.query(`DROP DATABASE IF EXISTS \`${testDbName}\``);
+  await admin.end();
+});
 
 async function register(email: string) {
   const r = await authService.register({ email, password: 'password123', nickname: 't' });
@@ -458,7 +462,7 @@ describe('并发安全(Review 阶段 0.1,P0-5)', () => {
     expect(['26', '66']).toContain(String(Number(row.amount)));
   });
 
-  it('同 id 并发插入:无 internal error 拒收(23505 回退合并),行唯一且字段完整', async () => {
+  it('同 id 并发插入:无 internal error 拒收(ER_DUP_ENTRY 回退合并),行唯一且字段完整', async () => {
     const { userId } = await register(`ins${Date.now()}@test.dev`);
     const { ledgerId, catId, accId } = await pullIds(userId);
     const txId = `dup-${Date.now()}`;
@@ -469,7 +473,7 @@ describe('并发安全(Review 阶段 0.1,P0-5)', () => {
       syncService.push(userId, [op('transaction', txId, 1, base('第二端'))]),
     ]);
     const statuses = [r1.results[0].status, r2.results[0].status];
-    // 修复前:其一为 rejected(internal error,裸 23505 上抛);修复后两 op 都正常定案
+    // 修复前:其一为 rejected(internal error,唯一冲突裸抛);修复后两 op 都正常定案
     for (const st of statuses) expect(st).not.toBe('rejected');
     // 行唯一
     const pull2 = await syncService.pull(userId, 0);
@@ -525,12 +529,47 @@ describe('共享账本(Review 阶段 0.2)', () => {
     const rows = await db.execute(
       (await import('drizzle-orm')).sql`select server_version from transactions where id = ${bTxId}`,
     );
-    const bVersion = Number((rows.rows[0] as { server_version: number }).server_version);
+    const bVersion = Number((rows[0][0] as { server_version: number }).server_version);
     expect(bVersion).toBeGreaterThan(after.cursor);
   });
 });
 
 describe('安全 P1 批次(第 23 轮,Review 2C)', () => {
+  it('并发错误密码只累计到锁定阈值,正确密码无法越过新锁', async () => {
+    const email = `parallel${Date.now()}@test.dev`;
+    await authService.register({ email, password: 'good-password123' });
+    const outcomes = await Promise.all(Array.from({ length: 8 }, () =>
+      authService.login({ email, password: 'wrong-password' }).then(() => 200, (error) => error.status),
+    ));
+    expect(outcomes.filter((status) => status === 401)).toHaveLength(4);
+    expect(outcomes.filter((status) => status === 423)).toHaveLength(4);
+    const [lock] = await db.execute(sql`select attempts from login_locks where email = ${email}`);
+    expect(Number((lock as Array<{ attempts: number }>)[0].attempts)).toBe(5);
+    await expect(authService.login({ email, password: 'good-password123' })).rejects.toMatchObject({ status: 423 });
+  });
+
+  it('并发错误验证码只累计到锁定阈值,正确码也被新锁阻止', async () => {
+    const phone = `135${String(Date.now()).slice(-8)}`;
+    const { devCode } = await authService.sendCode(phone);
+    const wrong = devCode === '000000' ? '999999' : '000000';
+    const outcomes = await Promise.all(Array.from({ length: 8 }, () =>
+      authService.login({ phone, code: wrong }).then(() => 200, (error) => error.status),
+    ));
+    expect(outcomes.filter((status) => status === 401)).toHaveLength(4);
+    expect(outcomes.filter((status) => status === 423)).toHaveLength(4);
+    const [rows] = await db.execute(sql`select attempts from phone_codes where phone = ${phone}`);
+    expect(Number((rows as Array<{ attempts: number }>)[0].attempts)).toBe(5);
+    await expect(authService.login({ phone, code: devCode! })).rejects.toMatchObject({ status: 423 });
+  });
+
+  it('并发首次发送验证码只允许一条通过冷却限制', async () => {
+    const phone = `134${String(Date.now()).slice(-8)}`;
+    const outcomes = await Promise.all(Array.from({ length: 3 }, () =>
+      authService.sendCode(phone).then(() => 200, (error) => error.status),
+    ));
+    expect(outcomes.sort()).toEqual([200, 429, 429]);
+  });
+
   it('P1-11:邮箱登录按账号 5 次失败锁定 423;锁定期内正确密码也被拒;成功登录清零', async () => {
     const email = `lock${Date.now()}@test.dev`;
     await authService.register({ email, password: 'lockpassword123', nickname: 't' });
@@ -651,5 +690,31 @@ describe('存钱计划同步(V1.1-a,第 32 轮):新实体全链路', () => {
     const pull2 = await syncService.pull(userId, 0);
     const tomb = pull2.rows.find((x) => x.entity === 'savings_plan' && (x.row as any).id === planId);
     expect((tomb!.row as any).is_deleted).toBe(true);
+  });
+});
+
+describe('MySQL 生成列约束', () => {
+  it('预算条目可更新、软删并以相同预算和分类重新创建', async () => {
+    const { userId } = await register(`mysql-budget-${Date.now()}@test.dev`);
+    const { ledgerId, catId } = await pullIds(userId);
+    const now = Date.now();
+    const budgetId = `budget-${now}`;
+    const firstId = `item-a-${now}`;
+    const change = (entity: 'budget' | 'budget_item', id: string, payload: Record<string, unknown>, clientVersion = 1, action: 'upsert' | 'delete' = 'upsert') => ({
+      entity, entityId: id, op: action, payload, clientVersion, occurredAt: now, deviceId: 'test',
+    });
+    expect((await syncService.push(userId, [change('budget', budgetId, {
+      id: budgetId, ledger_id: ledgerId, period_type: 'monthly', period_start: now,
+      total_amount: '1000', currency: 'CNY', rollover: false,
+    })])).results[0].status).toBe('applied');
+    const item = { id: firstId, budget_id: budgetId, category_id: catId, amount: '100' };
+    expect((await syncService.push(userId, [change('budget_item', firstId, item)])).results[0].status).toBe('applied');
+    expect((await syncService.push(userId, [change('budget_item', firstId, { ...item, used_cached: '20' }, 2)])).results[0].status).toBe('applied');
+    expect((await syncService.push(userId, [change('budget_item', firstId, item, 3, 'delete')])).results[0].status).toBe('applied');
+    const secondId = `item-b-${now}`;
+    expect((await syncService.push(userId, [change('budget_item', secondId, { ...item, id: secondId })])).results[0].status).toBe('applied');
+    const rows = (await syncService.pull(userId, 0)).rows.filter((r) => r.entity === 'budget_item');
+    expect(rows.find((r) => (r.row as any).id === secondId)?.row).toMatchObject({ amount: '100.0000', is_deleted: false });
+    expect(rows.every((r) => !('active_key' in r.row))).toBe(true);
   });
 });

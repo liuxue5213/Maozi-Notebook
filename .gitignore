@@ -6,7 +6,7 @@ dist-cjs/
 *.local
 *.log
 apps/server/data/
-# PGlite 内存库测试时的落盘产物(pglite://memorydb*),勿入库
+# 旧 PGlite 本地库与测试残留仅作数据迁移备份,勿入库
 apps/server/memorydb*/
 apps/server/*.db/
 apps/server/*.sqlite*
@@ -16,7 +16,7 @@ output/
 .workbuddy/
 deliverables/
 
-# Playwright E2E 临时库与产物(第 11 轮)
+# Playwright E2E 产物及旧数据库目录
 e2e-data/
 test-results/
 playwright-report/

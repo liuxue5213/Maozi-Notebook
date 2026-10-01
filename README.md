@@ -8,7 +8,7 @@
 packages/domain       领域模型:16 实体 zod 校验、金额定点运算、去重哈希、预置分类、预算/余额/信用/预测/语音/周期纯函数
 packages/sync         同步引擎:变更队列、增量拉取、字段级冲突合并(PRD 5.4/5.5),App/Web 复用同一份
 packages/sqlite-sync  SQLite 同步层:DDL、变更队列、RowSink(端无关;App 用 expo-sqlite,测试用 node:sqlite)
-apps/server           NestJS + Drizzle + PostgreSQL:16 张表、JWT 认证、/v1/sync push/pull、账本接口
+apps/server           NestJS + Drizzle + MySQL:22 张表、JWT 认证、/v1/sync push/pull、账本接口
 apps/web              React + Vite + Dexie:四 Tab、快速记账(语音/模板)、预算、日历、信用卡、导入、深色模式
 apps/mobile           Expo(SDK 57)端:expo-sqlite 复用 sqlite-sync,最小 UI(记账/明细/我的)
 ```
@@ -17,13 +17,13 @@ apps/mobile           Expo(SDK 57)端:expo-sqlite 复用 sqlite-sync,最小 UI(�
 
 ```bash
 pnpm install
+docker compose up -d # 启动本地 MySQL 8.4
 pnpm build          # 全仓构建 + 类型检查
-pnpm test           # 领域/同步单测
+TEST_MYSQL_URL=mysql://root:local-root-only@127.0.0.1:3306/mysql pnpm test
 
-# 后端(默认零配置嵌入式 PGlite,数据落 apps/server/data/)
+# 后端(默认 mysql://ledgerone:ledgerone@127.0.0.1:3306/ledgerone)
 cd apps/server
-npx drizzle-kit push        # 建表
-pnpm start                   # http://localhost:60505(先 pnpm build)
+pnpm start          # 启动时自动执行 drizzle-mysql 迁移;http://localhost:60505
 
 # Web
 cd apps/web
@@ -34,7 +34,7 @@ cd apps/mobile
 pnpm start                  # 需 Expo 开发环境/模拟器
 ```
 
-标准 PostgreSQL:`docker compose up -d` 后设 `DATABASE_URL=postgres://postgres:ledgerone@localhost:5432/ledgerone` 再 `drizzle-kit push`。
+生产环境配置独立的 `DATABASE_URL=mysql://...`、`JWT_SECRET` 和 `CORS_ORIGIN`。旧 PostgreSQL/PGlite 数据目录不能直接交给 MySQL 使用；已有 PGlite 数据可按 [MySQL 部署与迁移说明](apps/server/docs/deploy-runbook.md) 备份、预检并导入。
 
 App 端(Expo SDK 57):
 
@@ -47,7 +47,7 @@ cd apps/mobile && pnpm start                # 需 Expo 开发环境/模拟器
 
 - **离线优先闭环**(PRD M07-F01/F02):所有写操作先落本地库(IndexedDB),outbox 异步上行,断网可用,恢复后自动补同步
 - **安全加固 v2**(上线全检 P1 轮):全站限流(登录 5/min/IP、注册 3/h/IP、验证码 5/h/IP + 每号 60s 冷却、全局 100/min)、验证码 CSPRNG + HMAC 摘要存库 + 错 5 次锁定、`/v1/auth/logout` 全端下线(refresh TTL 30→14 天)、Web PIN PBKDF2+盐+失败锁定(旧哈希自动升级)、scrypt 异步化、`/readyz` 探活 DB、回收站 30 天自动清理 job
-- **同步协议 v2**(上线全检修复):客户端携带 `baseVersion` 编辑基线,服务端按基线做字段级合并——**多端并发双改不再静默丢失**(冲突即生成副本);坏 op 逐条 rejected + 客户端死信隔离,毒丸批次不再阻塞队列;越权 403 不回显服务端数据;服务端 8 项 PGlite 集成测试固化上述语义
+- **同步协议 v2**(上线全检修复):客户端携带 `baseVersion` 编辑基线,服务端按基线做字段级合并——**多端并发双改不再静默丢失**(冲突即生成副本);坏 op 逐条 rejected + 客户端死信隔离,毒丸批次不再阻塞队列;越权 403 不回显服务端数据;MySQL 集成测试覆盖上述语义
 - **幂等上行**:客户端 UUID 主键 + client_version 版本裁决,网络重放返回 noop(PRD 5.4)
 - **增量下行**:server_version 游标,单批 ≤500,按账本成员范围过滤
 - **字段级冲突合并**(PRD 5.5):非关键字段并集;金额/日期等关键字段不自动裁决,服务端保留 + 客户端生成「冲突副本」双版本并存
@@ -86,7 +86,7 @@ cd apps/mobile && pnpm start                # 需 Expo 开发环境/模拟器
 
 - 金额一律**字符串定点** decimal(18,4),方向由 type 决定;时间一律 UTC 毫秒(PRD 7.2)
 - 服务端表字段与客户端载荷同为 snake_case,同步层零键名映射
-- `users.version_seq` 单调序号即全局同步游标;每次写入预留序号池
+- `sync_seq` 单行全局计数器分配单调同步游标;MySQL 行锁保证序号分配与提交顺序一致
 - **未登录也可完整记账**:本地播种(账本/分类/账户)即入 outbox,登录后与流水一起全量上行,服务端按「先 push 后 pull」建立 owner 成员关系并跳过重复引导——这是「离线记账 → 后登录」核心路径;演示数据同样走真实上行链路(`window.__ledgerone.seedDemoData()`)
 - 已知取舍:全新设备登录会把本地新播种账本一并上行,可能与该账号已有账本并存(D04 多账本语义下可删除,后续迭代在登录前做服务端账本检测)
 
@@ -95,16 +95,16 @@ cd apps/mobile && pnpm start                # 需 Expo 开发环境/模拟器
 - **审计日志**:登录失败(脱敏)/验证码锁定/refresh 轮换与失败/登出/403 越权统一落 `audit_logs`(fire-and-forget,不阻断业务);保留 90 天,随启动与每 6 小时的维护任务清理
 - **端侧字段加密(F-05)**:Web 端开启应用锁后,备注/导入原文等字段以 AES-GCM 加密落 IndexedDB,密钥由 PIN 派生(PBKDF2/150k)、只驻内存;App 端为 SQLCipher 整库加密,密钥与登录 token 存系统安全区(SecureStore)。服务端仍为明文存储(端侧静态加密边界,见第 4 轮报告)
 - **账号隔离**:登录时区分「明确换号(清库)/纯本地离线数据(保留并上行)/旧账号残留(有游标或服务端行,清库)」三种情形(第 5 轮 E2E 修复)
-- **启动自动迁移**:全新库执行完整迁移链,已基线库增量执行,存量 db:push 库告警跳过并引导一次性 `pnpm db:push`;迁移失败拒绝启动
-- **优雅停机**:SIGTERM/SIGINT 会关闭 Nest 应用与数据库连接(PGlite 落盘收尾)——**切勿 SIGKILL**,PGlite 库文件被强杀后无法再打开
+- **启动自动迁移**:MySQL 全新库执行 `drizzle-mysql/` 迁移链,已基线库增量执行;无迁移记录的存量表会拒绝启动
+- **优雅停机**:SIGTERM/SIGINT 会关闭 Nest 应用与 MySQL 连接池
 - **限流语义(实测核验,第 10 轮)**:全局 100 次/分钟/IP(精确实测 100 过/30 拒);注册 3 次/小时、登录 5 次/分钟、验证码 5 次/小时为路由独立桶;真实客户端同步节奏(2s 防抖,约 60 请求/分钟)实测零误伤;`healthz/readyz` 探针已豁免限流(高频轮询不挤占用户配额)。注意:NAT 后多用户共享 IP 时共享全局桶,大用户量部署应在前置网关按真实客户端限流
-- **性能基线(本地实测,第 10 轮)**:dev 环境(PGlite 单进程,非生产口径):push 100 op 批次中位 ~600ms(每 op 独立事务),pull 500 行 ~62ms,空增量 ~24ms;生产 PG 数字待部署后回填
-- **生产配置清单**:`JWT_SECRET`(≥32 位且非默认,启动强校验)、`CORS_ORIGIN`(逗号分隔白名单,漏配拒绝跨域)、`DATABASE_URL`(标准 PG,禁用 PGlite 多副本);发布前 `pg_dump` 快照,详见 `.env.example`
+- **性能基线**:旧 PGlite 测试数字不适用于 MySQL,需要在目标部署环境重新测量
+- **生产配置清单**:`JWT_SECRET`(≥32 位且非默认,启动强校验)、`CORS_ORIGIN`(逗号分隔白名单,漏配拒绝跨域)、`DATABASE_URL`(MySQL);发布前用 `mysqldump` 备份,详见 `.env.example`
 
 ## 测试
 
-- 单元/集成:`pnpm test`(turbo 全仓;服务端集成 19 项含鉴权/同步/审计,Web 32 项含加密与求值)
-- 浏览器端到端:`pnpm --filter /web e2e`(Playwright + 系统 Chrome,自动拉起 API 临时库与 vite dev,跑「注册→记账→搜索→应用锁加密→登出重登」完整旅程;首次使用需 Chrome,或改 playwright.config 的 channel 并 `playwright install chromium`)
+- 单元/集成:`TEST_MYSQL_URL=mysql://root:<密码>@127.0.0.1:3306/mysql pnpm test`(服务端创建并删除独立临时库)
+- 浏览器端到端:`pnpm --filter @ledgerone/web e2e`(需要可建库的 `E2E_DATABASE_URL`,默认本地 Docker root 账号;Playwright 使用系统 Chrome)
 
 ## 下一步(按 PRD 优先级)
 

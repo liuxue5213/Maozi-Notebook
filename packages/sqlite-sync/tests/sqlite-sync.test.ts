@@ -47,6 +47,14 @@ describe('sqlite-sync 建表', () => {
 });
 
 describe('变更队列', () => {
+  it('outbox 写入失败会回滚业务行', async () => {
+    const { db, raw } = makeDb();
+    await initSchema(db);
+    raw.exec("CREATE TRIGGER reject_outbox BEFORE INSERT ON outbox BEGIN SELECT RAISE(ABORT, 'outbox failed'); END");
+    await expect(saveLocal(db, 'transaction', sampleTx('atomic-t1'))).rejects.toThrow('outbox failed');
+    expect(await db.getAllAsync('SELECT id FROM transactions WHERE id = ?', ['atomic-t1'])).toHaveLength(0);
+  });
+
   it('saveLocal 写行并入队,take/ack/count 正常', async () => {
     const { db } = makeDb();
     await initSchema(db);

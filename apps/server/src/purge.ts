@@ -43,8 +43,7 @@ export async function purgeAuditLogs(now = Date.now(), retentionDays = 90): Prom
   return countOf(res);
 }
 
-/** 影响行数:node-postgres 是 rowCount,PGlite 是 affectedRows(此前只读 rowCount,PGlite 上恒为 0) */
+/** mysql2 execute 返回 [ResultSetHeader, fields]。 */
 function countOf(res: unknown): number {
-  const r = res as { rowCount?: number; affectedRows?: number };
-  return Number(r.affectedRows ?? r.rowCount ?? 0);
+  return Number((res as [{ affectedRows?: number }])[0]?.affectedRows ?? 0);
 }

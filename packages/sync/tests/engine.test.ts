@@ -90,13 +90,14 @@ describe('SyncEngine', () => {
     expect(engine.getSnapshot().state).toBe('idle');
   });
 
-  it('push 失败不影响 pull 落地', async () => {
+  it('push 失败时保留队列与下行游标,避免跳过本地待推送行', async () => {
     const f = makeFakes();
     f.queue.push({ seq: 1, entity: 'transaction', entityId: 't9', op: 'upsert', payload: { id: 't9' }, clientVersion: 1, occurredAt: Date.now() });
     f.transport.push = async () => { throw new Error('network down'); };
     const engine = new SyncEngine({ transport: f.transport, queue: f.changeQueue, sink: f.sink });
     await engine.syncOnce();
-    expect(f.applied.length).toBe(2); // pull 照常落地
+    expect(f.applied.length).toBe(0);
+    expect(f.getCursor()).toBe(0);
     expect(engine.getSnapshot().state).toBe('error');
     expect(await f.changeQueue.count()).toBe(1); // push 队列保留待下轮重试
   });
@@ -115,6 +116,52 @@ describe('SyncEngine', () => {
     await engine.syncOnce();
     expect(onConflict).toHaveBeenCalledTimes(1);
     expect(f.queue).toHaveLength(0); // 冲突同样 ack,由回调生成副本
+  });
+
+  it('冲突副本写入失败时不出队也不推进游标', async () => {
+    const f = makeFakes();
+    f.queue.push({ seq: 1, entity: 'transaction', entityId: 't1', op: 'upsert', payload: { id: 't1' }, clientVersion: 1, occurredAt: Date.now() });
+    f.transport.push = async () => ({ results: [{ entityId: 't1', status: 'conflict', conflicts: [] }] });
+    const engine = new SyncEngine({ transport: f.transport, queue: f.changeQueue, sink: f.sink,
+      onPushConflict: async () => { throw new Error('storage failed'); } });
+    await engine.syncOnce();
+    expect(engine.getSnapshot().state).toBe('error');
+    expect(f.queue).toHaveLength(1);
+    expect(f.applied).toHaveLength(0);
+  });
+
+  it('死信持久化完成后才出队', async () => {
+    const f = makeFakes();
+    f.queue.push({ seq: 1, entity: 'transaction', entityId: 'bad', op: 'upsert', payload: { id: 'bad' }, clientVersion: 1, occurredAt: Date.now() });
+    f.transport.push = async () => ({ results: [{ entityId: 'bad', status: 'rejected', reason: 'invalid' }] });
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => { finish = resolve; });
+    const engine = new SyncEngine({ transport: f.transport, queue: f.changeQueue, sink: f.sink,
+      onDeadLetter: async () => gate });
+    const run = engine.syncOnce();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(f.queue).toHaveLength(1);
+    finish();
+    await run;
+    expect(f.queue).toHaveLength(0);
+  });
+
+  it('下行遇到本地待推送行时不跨过它推进游标', async () => {
+    const f = makeFakes();
+    f.transport.pull = async () => ({ cursor: 12, hasMore: false, rows: [
+      { entity: 'transaction', row: { id: 'safe', server_version: 10 } },
+      { entity: 'transaction', row: { id: 'pending', server_version: 11 } },
+      { entity: 'transaction', row: { id: 'later', server_version: 12 } },
+    ] });
+    f.sink.applyServerRow = async (entity, row) => {
+      if (row.id === 'pending') return false;
+      f.applied.push([entity, row]);
+      return true;
+    };
+    const engine = new SyncEngine({ transport: f.transport, queue: f.changeQueue, sink: f.sink });
+    await engine.syncOnce();
+    expect(f.getCursor()).toBe(10);
+    expect(f.applied.map(([, row]) => row.id)).toEqual(['safe']);
   });
 
   it('传输失败进入 error 状态且不清队列', async () => {

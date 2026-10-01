@@ -46,16 +46,15 @@ export async function createLedgerLocally(name: string, icon = '📒'): Promise<
     { id: newId(), ledger_id: ledgerId, name: '现金', type: 'cash' as const, initial_balance: '0', initial_date: now, currency: DEFAULT_CURRENCY, include_in_net: true, is_archived: false, sort: 0, credit_bill_day: null, credit_due_day: null, credit_limit: null, balance_cached: null, ...stamp() },
     { id: newId(), ledger_id: ledgerId, name: '储蓄卡', type: 'debit_card' as const, initial_balance: '0', initial_date: now, currency: DEFAULT_CURRENCY, include_in_net: true, is_archived: false, sort: 1, credit_bill_day: null, credit_due_day: null, credit_limit: null, balance_cached: null, ...stamp() },
   ];
-  await db.transaction('rw', db.ledgers, db.categories, db.accounts, async () => {
+  await db.transaction('rw', db.ledgers, db.categories, db.accounts, db.outbox, async () => {
     await db.ledgers.put(ledgerRow);
     await db.categories.bulkPut(cats);
     await db.accounts.bulkPut(accountRows);
+    // 播种与全部同步消息一起提交,避免登录时引用缺失的账本或分类。
+    await enqueue('ledger', ledgerRow as unknown as Record<string, unknown>);
+    for (const c of cats) await enqueue('category', c as unknown as Record<string, unknown>);
+    for (const a of accountRows) await enqueue('account', a as unknown as Record<string, unknown>);
   });
-  // 播种即入队:登录后账本/分类/账户随流水一起上行,服务端自动建立 owner 成员关系
-  // (否则「离线记账 → 登录」路径下,本地流水引用的账本在服务端不存在,会被 403 拒收)
-  enqueue('ledger', ledgerRow as unknown as Record<string, unknown>);
-  for (const c of cats) enqueue('category', c as unknown as Record<string, unknown>);
-  for (const a of accountRows) enqueue('account', a as unknown as Record<string, unknown>);
   return ledgerId;
 }
 

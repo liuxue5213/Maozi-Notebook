@@ -9,10 +9,10 @@
     "dev": "pnpm run build && sh -c 'tsc -w -p tsconfig.json & node --watch dist/main.js'",
     "db:push": "drizzle-kit push",
     "db:generate": "drizzle-kit generate",
+    "db:migrate:pglite": "node scripts/migrate-pglite-to-mysql.mjs",
     "test": "vitest run"
   },
   "dependencies": {
-    "@electric-sql/pglite": "^0.2.4",
     "@ledgerone/domain": "workspace:*",
     "@ledgerone/sync": "workspace:*",
     "@nestjs/common": "^11.1.0",
@@ -23,7 +23,7 @@
     "drizzle-orm": "^0.45.3",
     "express": "^5.2.1",
     "helmet": "^8.3.0",
-    "pg": "^8.16.0",
+    "mysql2": "^3.15.3",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "uuid": "^11.1.0",
@@ -31,9 +31,9 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.2.4",
     "@types/express": "^5.0.0",
     "@types/node": "^24.0.0",
-    "@types/pg": "^8.15.0",
     "drizzle-kit": "^0.31.2",
     "typescript": "^5.7.3"
   }

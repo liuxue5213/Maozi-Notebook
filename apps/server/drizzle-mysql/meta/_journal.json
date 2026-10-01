@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1790852534400,
+      "tag": "0000_familiar_outlaw_kid",
+      "breakpoints": true
+    }
+  ]
+}

@@ -5,10 +5,15 @@ const DEFAULT_JWT = 'ledgerone-dev-secret-CHANGE-ME';
 /**
  * 启动即校验(上线前全检 B1/B2 + 第 19 轮 P0-6):
  * - 生产环境(NODE_ENV=production):JWT_SECRET 必须存在、≥32 位、≠默认值;禁止 DEV_MODE=true;
- *   DATABASE_URL 必须显式配置且为标准 PostgreSQL(pglite:// 为进程内全局互斥,多副本必坏);
- * - 非生产保持零配置可跑(PGlite + 默认密钥)。
+ *   DATABASE_URL 必须显式配置且为 MySQL URL。
+ * - 开发环境也使用 MySQL,避免测试与生产采用不同 SQL 方言。
  */
 function failFast(): void {
+  const dbUrl = process.env.DATABASE_URL ?? 'mysql://ledgerone:ledgerone@127.0.0.1:3306/ledgerone';
+  if (!dbUrl.startsWith('mysql://')) {
+    console.error('[ledgerone] DATABASE_URL 必须为 mysql:// URL;旧 PostgreSQL/PGlite 配置已不再支持');
+    process.exit(1);
+  }
   if (process.env.NODE_ENV !== 'production') return;
   const secret = process.env.JWT_SECRET ?? '';
   if (!secret || secret.length < 32 || secret === DEFAULT_JWT) {
@@ -19,16 +24,15 @@ function failFast(): void {
     console.error('[ledgerone] 生产环境禁止 DEV_MODE=true(验证码直通漏洞),拒绝启动');
     process.exit(1);
   }
-  const dbUrl = process.env.DATABASE_URL ?? '';
-  if (!dbUrl || dbUrl.startsWith('pglite://')) {
-    console.error('[ledgerone] 生产环境 DATABASE_URL 必须为标准 PostgreSQL(postgres://…),禁止缺失或 pglite://(进程内互斥,多副本数据损坏),拒绝启动');
+  if (!process.env.DATABASE_URL) {
+    console.error('[ledgerone] 生产环境必须显式配置 DATABASE_URL,拒绝启动');
     process.exit(1);
   }
 }
 failFast();
 
 export const env = {
-  DATABASE_URL: process.env.DATABASE_URL ?? 'pglite://data/ledgerone',
+  DATABASE_URL: process.env.DATABASE_URL ?? 'mysql://ledgerone:ledgerone@127.0.0.1:3306/ledgerone',
   JWT_SECRET: process.env.JWT_SECRET || DEFAULT_JWT,
   PORT: Number(process.env.PORT ?? 60505),
   DEV_MODE: process.env.DEV_MODE === 'true',

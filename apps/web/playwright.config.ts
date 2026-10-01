@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test';
 
 /**
  * 浏览器端到端(全检第 11 轮,固化第 5/6 轮手工回归):
- * - API server:全新临时 PGlite 库(cwd 在 apps/server 以加载 drizzle 迁移);
+ * - API server:独立 MySQL 测试库(执行前创建 ledgerone_e2e);
  * - Web:vite dev(与开发态一致);先 `pnpm build`(server)再运行本套件(见 package.json e2e 脚本)。
  */
 export default defineConfig({
@@ -36,7 +36,7 @@ export default defineConfig({
       url: 'http://localhost:60505/readyz',
       reuseExistingServer: false,
       timeout: 60_000,
-      env: { DATABASE_URL: 'pglite://e2e-data', DEV_MODE: 'true' },
+      env: { DATABASE_URL: process.env.E2E_DATABASE_URL ?? 'mysql://root:local-root-only@127.0.0.1:3306/ledgerone_e2e', DEV_MODE: 'true' },
     },
     {
       command: 'pnpm dev',

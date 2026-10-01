@@ -7,6 +7,18 @@ on:
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: test-root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -u root -ptest-root"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+    env:
+      TEST_MYSQL_URL: mysql://root:test-root@127.0.0.1:3306/mysql
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -18,10 +30,6 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build            # 全仓构建 + 类型检查(含 mobile typecheck 经 turbo build/typecheck)
-      - run: pnpm test             # domain/sync/sqlite-sync/web 单测
-      - name: Server integration tests
-        run: |
-          cd apps/server
-          npx vitest run
+      - run: pnpm test             # 含 MySQL 服务端集成测试
       - name: Mobile typecheck
         run: pnpm --filter @ledgerone/mobile typecheck

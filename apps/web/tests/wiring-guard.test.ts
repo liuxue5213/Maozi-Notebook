@@ -5,7 +5,7 @@
  * P0-2:周期生成确定性 id,重复触发不产生重复流水(修复前多标签页双流水)
  */
 import 'fake-indexeddb/auto';
-import { describe, beforeAll, it, expect } from 'vitest';
+import { describe, beforeAll, it, expect, vi } from 'vitest';
 
 const lsStore = new Map<string, string>();
 beforeAll(() => {
@@ -36,6 +36,8 @@ describe('P0-1:onPushConflict 按 entity 分发', () => {
       [{ field: 'amount' }],
     );
     expect(await db.transactions.count()).toBe(before); // 流水表零写入
+    const dead = await db.deadletter.where('entityId').equals('r1').first();
+    expect(dead?.reason).toContain('amount');
   });
 
   it('流水实体冲突 → 仍生成冲突副本(行为不回归)', async () => {
@@ -52,6 +54,20 @@ describe('P0-1:onPushConflict 按 entity 分发', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].note).toContain('冲突副本');
     expect(rows[0].id).not.toBe('tx-c1');
+  });
+});
+
+describe('本地写入与同步队列', () => {
+  it('入队失败会回滚业务行', async () => {
+    const { db } = await import('../src/db/db');
+    const { saveLocal } = await import('../src/sync/wiring');
+    const add = vi.spyOn(db.outbox, 'add').mockRejectedValueOnce(new Error('outbox failed'));
+    try {
+      await expect(saveLocal('transaction', { id: 'atomic-t1', ledger_id: 'l1' })).rejects.toThrow('outbox failed');
+      expect(await db.transactions.get('atomic-t1')).toBeUndefined();
+    } finally {
+      add.mockRestore();
+    }
   });
 });
 

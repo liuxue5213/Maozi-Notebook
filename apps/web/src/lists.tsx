@@ -4,7 +4,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { addAmount, formatAmount, subAmount, type CategoryRow, type TransactionRow } from '@ledgerone/domain';
 import { db } from './db/db';
 import { getActiveLedgerId } from './db/seed';
-import { enqueue } from './sync/wiring';
+import { saveLocal } from './sync/wiring';
 import { loadTxWindow, TX_PAGE_SIZE } from './utils/tx-list';
 import { TxEditor } from './txedit';
 import { CalendarView } from './calendar';
@@ -203,8 +203,7 @@ export function TransactionList() {
       client_version: r.client_version + 1,
       updated_at: Date.now(),
     };
-    await db.transactions.put(updated);
-    enqueue('transaction', updated as unknown as Record<string, unknown>); // 回收站恢复(M01-F12)
+    await saveLocal('transaction', updated as unknown as Record<string, unknown>); // 回收站恢复(M01-F12)
   };
 
   const filterCount = activeFilterCount(filter);

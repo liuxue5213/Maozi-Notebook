@@ -10,11 +10,13 @@ function wrap(d: unknown): SQLiteLike {
     execAsync: (sql: string) => Promise<unknown>;
     runAsync: (sql: string, params?: unknown[]) => Promise<unknown>;
     getAllAsync: <T>(sql: string, params?: unknown[]) => Promise<T[]>;
+    withExclusiveTransactionAsync: (task: (tx: unknown) => Promise<void>) => Promise<void>;
   };
   return {
     execAsync: (sql) => c.execAsync(sql),
     runAsync: (sql, params) => c.runAsync(sql, params),
     getAllAsync: <T>(sql: string, params?: unknown[]) => c.getAllAsync<T>(sql, params),
+    withExclusiveTransactionAsync: (task) => c.withExclusiveTransactionAsync((tx) => task(wrap(tx))),
   };
 }
 

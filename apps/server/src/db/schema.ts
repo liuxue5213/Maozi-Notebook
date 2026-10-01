@@ -1,14 +1,14 @@
-import { pgTable, text, integer, bigint, boolean, numeric, jsonb, index, uniqueIndex } from 'drizzle-orm/pg-core';
+import { mysqlTable, varchar, text, int, bigint, boolean, decimal, json, index, uniqueIndex } from 'drizzle-orm/mysql-core';
 import { sql } from 'drizzle-orm';
 
 /**
  * 字段命名与客户端/PRD 5.2 保持 snake_case 一致,同步层无需再做键名映射。
- * 时间一律 UTC 毫秒(PRD 7.2),金额一律 numeric 定点字符串(PRD 5.2)。
+ * 时间一律 UTC 毫秒(PRD 7.2),金额一律 decimal 定点字符串(PRD 5.2)。
  */
 const timeMs = (name: string) => bigint(name, { mode: 'number' });
 
 const syncCols = {
-  client_version: integer('client_version').notNull().default(1),
+  client_version: int('client_version').notNull().default(1),
   server_version: bigint('server_version', { mode: 'number' }),
   is_deleted: boolean('is_deleted').notNull().default(false),
   deleted_at: timeMs('deleted_at'),
@@ -16,78 +16,79 @@ const syncCols = {
   updated_at: timeMs('updated_at').notNull(),
 };
 
-export const users = pgTable('users', {
-  id: text('id').primaryKey(),
-  email: text('email').unique(),
-  phone: text('phone').unique(),
+export const users = mysqlTable('users', {
+  id: varchar('id', { length: 128 }).primaryKey(),
+  email: varchar('email', { length: 191 }).unique(),
+  phone: varchar('phone', { length: 191 }).unique(),
   password_hash: text('password_hash'),
-  nickname: text('nickname').notNull().default(''),
+  nickname: varchar('nickname', { length: 191 }).notNull().default(''),
   avatar_url: text('avatar_url'),
-  base_currency: text('base_currency').notNull().default('CNY'),
+  base_currency: varchar('base_currency', { length: 191 }).notNull().default('CNY'),
   /** 同步游标源:全局单调递增,下行按 server_version > cursor 增量拉取 */
   version_seq: bigint('version_seq', { mode: 'number' }).notNull().default(0),
-  status: text('status').notNull().default('active'),
+  status: varchar('status', { length: 191 }).notNull().default('active'),
   created_at: timeMs('created_at').notNull(),
   updated_at: timeMs('updated_at').notNull(),
 });
 
-export const ledgers = pgTable('ledgers', {
-  id: text('id').primaryKey(),
-  owner_user_id: text('owner_user_id').notNull(),
-  name: text('name').notNull(),
-  type: text('type').notNull().default('personal'),
-  icon: text('icon'),
-  sort: integer('sort').notNull().default(0),
+export const ledgers = mysqlTable('ledgers', {
+  id: varchar('id', { length: 128 }).primaryKey(),
+  owner_user_id: varchar('owner_user_id', { length: 128 }).notNull(),
+  name: varchar('name', { length: 191 }).notNull(),
+  type: varchar('type', { length: 191 }).notNull().default('personal'),
+  icon: varchar('icon', { length: 191 }),
+  sort: int('sort').notNull().default(0),
   ...syncCols,
 }, (t) => [index('ledger_lv_idx').on(t.server_version)]);
 
-export const ledger_members = pgTable(
+export const ledger_members = mysqlTable(
   'ledger_members',
   {
-    id: text('id').primaryKey(),
-    ledger_id: text('ledger_id').notNull(),
-    user_id: text('user_id').notNull(),
-    role: text('role').notNull().default('viewer'),
-    nickname_in_ledger: text('nickname_in_ledger'),
+    id: varchar('id', { length: 128 }).primaryKey(),
+    ledger_id: varchar('ledger_id', { length: 128 }).notNull(),
+    user_id: varchar('user_id', { length: 128 }).notNull(),
+    role: varchar('role', { length: 191 }).notNull().default('viewer'),
+    nickname_in_ledger: varchar('nickname_in_ledger', { length: 191 }),
     joined_at: timeMs('joined_at').notNull(),
+    active_key: int('active_key').generatedAlwaysAs(sql`case when is_deleted = 0 then 1 else null end`),
     ...syncCols,
   },
-  (t) => [uniqueIndex('member_ledger_user_uq').on(t.ledger_id, t.user_id).where(sql`is_deleted = false`), index('member_user_idx').on(t.user_id, t.is_deleted)],
+  (t) => [uniqueIndex('member_ledger_user_uq').on(t.ledger_id, t.user_id, t.active_key), index('member_user_idx').on(t.user_id, t.is_deleted)],
 );
 
-export const accounts = pgTable(
+export const accounts = mysqlTable(
   'accounts',
   {
-    id: text('id').primaryKey(),
-    ledger_id: text('ledger_id').notNull(),
-    name: text('name').notNull(),
-    type: text('type').notNull().default('cash'),
-    initial_balance: numeric('initial_balance', { precision: 18, scale: 4 }).notNull().default('0'),
+    id: varchar('id', { length: 128 }).primaryKey(),
+    ledger_id: varchar('ledger_id', { length: 128 }).notNull(),
+    name: varchar('name', { length: 191 }).notNull(),
+    type: varchar('type', { length: 191 }).notNull().default('cash'),
+    initial_balance: decimal('initial_balance', { precision: 18, scale: 4 }).notNull().default('0'),
     initial_date: timeMs('initial_date').notNull(),
-    currency: text('currency').notNull().default('CNY'),
+    currency: varchar('currency', { length: 191 }).notNull().default('CNY'),
     include_in_net: boolean('include_in_net').notNull().default(true),
     is_archived: boolean('is_archived').notNull().default(false),
-    sort: integer('sort').notNull().default(0),
-    credit_bill_day: integer('credit_bill_day'),
-    credit_due_day: integer('credit_due_day'),
-    credit_limit: numeric('credit_limit', { precision: 18, scale: 4 }),
-    balance_cached: numeric('balance_cached', { precision: 18, scale: 4 }),
+    sort: int('sort').notNull().default(0),
+    credit_bill_day: int('credit_bill_day'),
+    credit_due_day: int('credit_due_day'),
+    credit_limit: decimal('credit_limit', { precision: 18, scale: 4 }),
+    balance_cached: decimal('balance_cached', { precision: 18, scale: 4 }),
     ...syncCols,
   },
   (t) => [index('account_ledger_idx').on(t.ledger_id), index('account_lv_idx').on(t.ledger_id, t.server_version)],
 );
 
-export const categories = pgTable(
+export const categories = mysqlTable(
   'categories',
   {
-    id: text('id').primaryKey(),
-    ledger_id: text('ledger_id').notNull(),
-    parent_id: text('parent_id'),
-    name: text('name').notNull(),
-    kind: text('kind').notNull().default('expense'),
-    icon: text('icon').notNull().default('📦'),
-    color: text('color'),
-    sort: integer('sort').notNull().default(0),
+    id: varchar('id', { length: 128 }).primaryKey(),
+    ledger_id: varchar('ledger_id', { length: 128 }).notNull(),
+    parent_id: varchar('parent_id', { length: 128 }),
+    name: varchar('name', { length: 191 }).notNull(),
+    kind: varchar('kind', { length: 191 }).notNull().default('expense'),
+    icon: varchar('icon', { length: 191 }).notNull().default('📦'),
+    color: varchar('color', { length: 191 }),
+    sort: int('sort').notNull().default(0),
     is_hidden: boolean('is_hidden').notNull().default(false),
     is_preset: boolean('is_preset').notNull().default(false),
     ...syncCols,
@@ -95,42 +96,42 @@ export const categories = pgTable(
   (t) => [index('category_ledger_idx').on(t.ledger_id), index('category_lv_idx').on(t.ledger_id, t.server_version)],
 );
 
-export const tags = pgTable(
+export const tags = mysqlTable(
   'tags',
   {
-    id: text('id').primaryKey(),
-    ledger_id: text('ledger_id').notNull(),
-    name: text('name').notNull(),
-    color: text('color'),
+    id: varchar('id', { length: 128 }).primaryKey(),
+    ledger_id: varchar('ledger_id', { length: 128 }).notNull(),
+    name: varchar('name', { length: 191 }).notNull(),
+    color: varchar('color', { length: 191 }),
     ...syncCols,
   },
   (t) => [index('tag_ledger_idx').on(t.ledger_id), index('tag_lv_idx').on(t.ledger_id, t.server_version)],
 );
 
-export const transactions = pgTable(
+export const transactions = mysqlTable(
   'transactions',
   {
-    id: text('id').primaryKey(),
-    ledger_id: text('ledger_id').notNull(),
-    user_id: text('user_id').notNull(),
-    member_id: text('member_id'),
-    type: text('type').notNull(),
+    id: varchar('id', { length: 128 }).primaryKey(),
+    ledger_id: varchar('ledger_id', { length: 128 }).notNull(),
+    user_id: varchar('user_id', { length: 128 }).notNull(),
+    member_id: varchar('member_id', { length: 128 }),
+    type: varchar('type', { length: 191 }).notNull(),
     /** 一律存正数,方向由 type 决定 */
-    amount: numeric('amount', { precision: 18, scale: 4 }).notNull(),
-    currency: text('currency').notNull().default('CNY'),
-    amount_base: numeric('amount_base', { precision: 18, scale: 4 }).notNull(),
-    exchange_rate: numeric('exchange_rate', { precision: 18, scale: 8 }),
-    category_id: text('category_id'),
-    account_id: text('account_id').notNull(),
-    to_account_id: text('to_account_id'),
+    amount: decimal('amount', { precision: 18, scale: 4 }).notNull(),
+    currency: varchar('currency', { length: 191 }).notNull().default('CNY'),
+    amount_base: decimal('amount_base', { precision: 18, scale: 4 }).notNull(),
+    exchange_rate: decimal('exchange_rate', { precision: 18, scale: 8 }),
+    category_id: varchar('category_id', { length: 128 }),
+    account_id: varchar('account_id', { length: 128 }).notNull(),
+    to_account_id: varchar('to_account_id', { length: 128 }),
     happened_at: timeMs('happened_at').notNull(),
     note: text('note'),
     is_refunded: boolean('is_refunded').notNull().default(false),
-    refund_of_id: text('refund_of_id'),
-    reimburse_status: text('reimburse_status'),
+    refund_of_id: varchar('refund_of_id', { length: 128 }),
+    reimburse_status: varchar('reimburse_status', { length: 191 }),
     exclude_from_budget: boolean('exclude_from_budget').notNull().default(false),
-    attachment_count: integer('attachment_count').notNull().default(0),
-    source: text('source').notNull().default('manual'),
+    attachment_count: int('attachment_count').notNull().default(0),
+    source: varchar('source', { length: 191 }).notNull().default('manual'),
     ...syncCols,
   },
   (t) => [
@@ -142,54 +143,55 @@ export const transactions = pgTable(
   ],
 );
 
-export const transaction_tags = pgTable(
+export const transaction_tags = mysqlTable(
   'transaction_tags',
   {
-    transaction_id: text('transaction_id').notNull(),
-    tag_id: text('tag_id').notNull(),
+    transaction_id: varchar('transaction_id', { length: 128 }).notNull(),
+    tag_id: varchar('tag_id', { length: 128 }).notNull(),
   },
   (t) => [uniqueIndex('tx_tag_uq').on(t.transaction_id, t.tag_id)],
 );
 
-export const budgets = pgTable(
+export const budgets = mysqlTable(
   'budgets',
   {
-    id: text('id').primaryKey(),
-    ledger_id: text('ledger_id').notNull(),
-    period_type: text('period_type').notNull().default('monthly'),
+    id: varchar('id', { length: 128 }).primaryKey(),
+    ledger_id: varchar('ledger_id', { length: 128 }).notNull(),
+    period_type: varchar('period_type', { length: 191 }).notNull().default('monthly'),
     period_start: timeMs('period_start').notNull(),
-    total_amount: numeric('total_amount', { precision: 18, scale: 4 }).notNull(),
-    currency: text('currency').notNull().default('CNY'),
+    total_amount: decimal('total_amount', { precision: 18, scale: 4 }).notNull(),
+    currency: varchar('currency', { length: 191 }).notNull().default('CNY'),
     rollover: boolean('rollover').notNull().default(false),
     ...syncCols,
   },
   (t) => [index('budget_ledger_idx').on(t.ledger_id), index('budget_lv_idx').on(t.ledger_id, t.server_version)],
 );
 
-export const budget_items = pgTable(
+export const budget_items = mysqlTable(
   'budget_items',
   {
-    id: text('id').primaryKey(),
-    budget_id: text('budget_id').notNull(),
-    category_id: text('category_id').notNull(),
-    amount: numeric('amount', { precision: 18, scale: 4 }).notNull(),
-    used_cached: numeric('used_cached', { precision: 18, scale: 4 }),
+    id: varchar('id', { length: 128 }).primaryKey(),
+    budget_id: varchar('budget_id', { length: 128 }).notNull(),
+    category_id: varchar('category_id', { length: 128 }).notNull(),
+    amount: decimal('amount', { precision: 18, scale: 4 }).notNull(),
+    used_cached: decimal('used_cached', { precision: 18, scale: 4 }),
+    active_key: int('active_key').generatedAlwaysAs(sql`case when is_deleted = 0 then 1 else null end`),
     ...syncCols,
   },
-  (t) => [uniqueIndex('budget_item_uq').on(t.budget_id, t.category_id).where(sql`is_deleted = false`)],
+  (t) => [uniqueIndex('budget_item_uq').on(t.budget_id, t.category_id, t.active_key)],
 );
 
-export const recurring_rules = pgTable(
+export const recurring_rules = mysqlTable(
   'recurring_rules',
   {
-    id: text('id').primaryKey(),
-    ledger_id: text('ledger_id').notNull(),
-    amount: numeric('amount', { precision: 18, scale: 4 }).notNull(),
-    category_id: text('category_id'),
-    account_id: text('account_id').notNull(),
+    id: varchar('id', { length: 128 }).primaryKey(),
+    ledger_id: varchar('ledger_id', { length: 128 }).notNull(),
+    amount: decimal('amount', { precision: 18, scale: 4 }).notNull(),
+    category_id: varchar('category_id', { length: 128 }),
+    account_id: varchar('account_id', { length: 128 }).notNull(),
     note: text('note'),
-    frequency: text('frequency').notNull().default('monthly'),
-    interval: integer('interval').notNull().default(1),
+    frequency: varchar('frequency', { length: 191 }).notNull().default('monthly'),
+    interval: int('interval').notNull().default(1),
     next_run_at: timeMs('next_run_at').notNull(),
     paused: boolean('paused').notNull().default(false),
     last_run_at: timeMs('last_run_at'),
@@ -198,84 +200,85 @@ export const recurring_rules = pgTable(
   (t) => [index('recurring_ledger_idx').on(t.ledger_id), index('recurring_lv_idx').on(t.ledger_id, t.server_version)],
 );
 
-export const attachments = pgTable(
+export const attachments = mysqlTable(
   'attachments',
   {
-    id: text('id').primaryKey(),
-    transaction_id: text('transaction_id').notNull(),
+    id: varchar('id', { length: 128 }).primaryKey(),
+    transaction_id: varchar('transaction_id', { length: 128 }).notNull(),
     file_key: text('file_key').notNull(),
-    width: integer('width'),
-    height: integer('height'),
-    size: integer('size'),
-    sha256: text('sha256'),
-    upload_status: text('upload_status').notNull().default('local'),
+    width: int('width'),
+    height: int('height'),
+    size: int('size'),
+    sha256: varchar('sha256', { length: 191 }),
+    upload_status: varchar('upload_status', { length: 191 }).notNull().default('local'),
     ...syncCols,
   },
   (t) => [index('attachment_tx_idx').on(t.transaction_id)],
 );
 
-export const pending_transactions = pgTable(
+export const pending_transactions = mysqlTable(
   'pending_transactions',
   {
-    id: text('id').primaryKey(),
-    ledger_id: text('ledger_id').notNull(),
-    source_type: text('source_type').notNull().default('import'),
+    id: varchar('id', { length: 128 }).primaryKey(),
+    ledger_id: varchar('ledger_id', { length: 128 }).notNull(),
+    source_type: varchar('source_type', { length: 191 }).notNull().default('import'),
     raw: text('raw'),
-    parsed: jsonb('parsed'),
-    confidence: numeric('confidence', { precision: 4, scale: 3 }),
-    dedupe_hash: text('dedupe_hash'),
-    status: text('status').notNull().default('pending'),
+    parsed: json('parsed'),
+    confidence: decimal('confidence', { precision: 4, scale: 3 }),
+    dedupe_hash: varchar('dedupe_hash', { length: 191 }),
+    status: varchar('status', { length: 191 }).notNull().default('pending'),
+    active_key: int('active_key').generatedAlwaysAs(sql`case when is_deleted = 0 then 1 else null end`),
     ...syncCols,
   },
   (t) => [
-    uniqueIndex('pending_dedupe_uq').on(t.ledger_id, t.dedupe_hash).where(sql`is_deleted = false`),
+    uniqueIndex('pending_dedupe_uq').on(t.ledger_id, t.dedupe_hash, t.active_key),
     index('pending_ledger_idx').on(t.ledger_id), index('pending_lv_idx').on(t.ledger_id, t.server_version),
   ],
 );
 
-export const debts = pgTable(
+export const debts = mysqlTable(
   'debts',
   {
-    id: text('id').primaryKey(),
-    ledger_id: text('ledger_id').notNull(),
-    direction: text('direction').notNull(),
-    counterparty: text('counterparty').notNull(),
-    principal: numeric('principal', { precision: 18, scale: 4 }).notNull(),
-    repaid: numeric('repaid', { precision: 18, scale: 4 }).notNull().default('0'),
+    id: varchar('id', { length: 128 }).primaryKey(),
+    ledger_id: varchar('ledger_id', { length: 128 }).notNull(),
+    direction: varchar('direction', { length: 191 }).notNull(),
+    counterparty: varchar('counterparty', { length: 191 }).notNull(),
+    principal: decimal('principal', { precision: 18, scale: 4 }).notNull(),
+    repaid: decimal('repaid', { precision: 18, scale: 4 }).notNull().default('0'),
     due_at: timeMs('due_at'),
-    transaction_id: text('transaction_id'),
+    transaction_id: varchar('transaction_id', { length: 128 }),
     ...syncCols,
   },
   (t) => [index('debt_ledger_idx').on(t.ledger_id), index('debt_lv_idx').on(t.ledger_id, t.server_version)],
 );
 
-export const reimbursements = pgTable(
+export const reimbursements = mysqlTable(
   'reimbursements',
   {
-    id: text('id').primaryKey(),
-    ledger_id: text('ledger_id').notNull(),
-    title: text('title').notNull(),
-    status: text('status').notNull().default('pending'),
-    total_amount: numeric('total_amount', { precision: 18, scale: 4 }).notNull(),
-    transaction_ids: jsonb('transaction_ids').notNull().default([]),
+    id: varchar('id', { length: 128 }).primaryKey(),
+    ledger_id: varchar('ledger_id', { length: 128 }).notNull(),
+    title: varchar('title', { length: 191 }).notNull(),
+    status: varchar('status', { length: 191 }).notNull().default('pending'),
+    total_amount: decimal('total_amount', { precision: 18, scale: 4 }).notNull(),
+    transaction_ids: json('transaction_ids').notNull(),
     ...syncCols,
   },
   (t) => [index('reimbursement_ledger_idx').on(t.ledger_id), index('reimbursement_lv_idx').on(t.ledger_id, t.server_version)],
 );
 
 /** 同步变更日志(PRD 5.1 sync_change):增量同步与冲突排查 */
-export const sync_changes = pgTable(
+export const sync_changes = mysqlTable(
   'sync_changes',
   {
-    id: text('id').primaryKey(),
-    user_id: text('user_id').notNull(),
-    entity: text('entity').notNull(),
-    entity_id: text('entity_id').notNull(),
-    op: text('op').notNull(),
-    client_version: integer('client_version').notNull(),
+    id: varchar('id', { length: 128 }).primaryKey(),
+    user_id: varchar('user_id', { length: 128 }).notNull(),
+    entity: varchar('entity', { length: 191 }).notNull(),
+    entity_id: varchar('entity_id', { length: 128 }).notNull(),
+    op: varchar('op', { length: 191 }).notNull(),
+    client_version: int('client_version').notNull(),
     server_version: bigint('server_version', { mode: 'number' }).notNull(),
     conflict: boolean('conflict').notNull().default(false),
-    payload: jsonb('payload'),
+    payload: json('payload'),
     created_at: timeMs('created_at').notNull(),
   },
   (t) => [index('sync_change_user_idx').on(t.user_id, t.server_version)],
@@ -286,26 +289,26 @@ export const sync_changes = pgTable(
  * - 账本类事件(成员变更/越权尝试)填 ledger_id + actor_user_id;
  * - 鉴权类事件(登录失败/锁定/refresh 轮换)无账本维度,两者可空,标识脱敏后入 summary/target_entity。
  */
-export const audit_logs = pgTable(
+export const audit_logs = mysqlTable(
   'audit_logs',
   {
-    id: text('id').primaryKey(),
-    ledger_id: text('ledger_id'),
-    actor_user_id: text('actor_user_id'),
-    action: text('action').notNull(),
-    target_entity: text('target_entity'),
-    summary: jsonb('summary'),
+    id: varchar('id', { length: 128 }).primaryKey(),
+    ledger_id: varchar('ledger_id', { length: 128 }),
+    actor_user_id: varchar('actor_user_id', { length: 128 }),
+    action: varchar('action', { length: 191 }).notNull(),
+    target_entity: varchar('target_entity', { length: 191 }),
+    summary: json('summary'),
     created_at: timeMs('created_at').notNull(),
   },
   (t) => [index('audit_ledger_idx').on(t.ledger_id, t.created_at), index('audit_action_idx').on(t.action, t.created_at)],
 );
 
-export const refresh_tokens = pgTable(
+export const refresh_tokens = mysqlTable(
   'refresh_tokens',
   {
-    id: text('id').primaryKey(),
-    user_id: text('user_id').notNull(),
-    token_hash: text('token_hash').notNull().unique(),
+    id: varchar('id', { length: 128 }).primaryKey(),
+    user_id: varchar('user_id', { length: 128 }).notNull(),
+    token_hash: varchar('token_hash', { length: 191 }).notNull().unique(),
     expires_at: timeMs('expires_at').notNull(),
     revoked_at: timeMs('revoked_at'),
     created_at: timeMs('created_at').notNull(),
@@ -313,12 +316,12 @@ export const refresh_tokens = pgTable(
   (t) => [index('refresh_user_idx').on(t.user_id)],
 );
 
-export const phone_codes = pgTable('phone_codes', {
-  phone: text('phone').primaryKey(),
+export const phone_codes = mysqlTable('phone_codes', {
+  phone: varchar('phone', { length: 191 }).primaryKey(),
   /** 只存 HMAC 摘要,不存明文(F-06) */
-  code_hash: text('code_hash').notNull(),
+  code_hash: varchar('code_hash', { length: 191 }).notNull(),
   /** 验证失败次数(达到 CODE_MAX_ATTEMPTS 即写入 locked_until) */
-  attempts: integer('attempts').notNull().default(0),
+  attempts: int('attempts').notNull().default(0),
   /**
    * 锁定截止时间戳(F-06):连续失败 5 次后锁定 15 分钟。
    * 锁定期间既拒绝校验也拒绝重发 —— 否则攻击者等 60s 重发即可绕过锁定,
@@ -336,11 +339,11 @@ export const phone_codes = pgTable('phone_codes', {
  * 邮箱密码登录按账号失败锁定(P1-11,Review):与验证码锁定(F-06)同语义 ——
  * 5 次失败锁 15 分钟。全局限流按 IP,挡不住针对单一账号的多 IP 分布式撞库。
  */
-export const login_locks = pgTable('login_locks', {
+export const login_locks = mysqlTable('login_locks', {
   /** 归一化邮箱(小写)作主键 */
-  email: text('email').primaryKey(),
+  email: varchar('email', { length: 191 }).primaryKey(),
   /** 连续失败次数(成功登录即删行清零) */
-  attempts: integer('attempts').notNull().default(0),
+  attempts: int('attempts').notNull().default(0),
   locked_until: timeMs('locked_until').notNull().default(0),
   updated_at: timeMs('updated_at').notNull(),
 });
@@ -355,9 +358,9 @@ export const login_locks = pgTable('login_locks', {
  * 改为单行全局计数器后,所有行共享同一单调命名空间,单游标即可正确消费;
  * `PullResponse` 协议不变,三端零改造。
  */
-export const sync_seq = pgTable('sync_seq', {
+export const sync_seq = mysqlTable('sync_seq', {
   /** 固定单值 'global':单行表,作为全库唯一的序号源 */
-  id: text('id').primaryKey(),
+  id: varchar('id', { length: 128 }).primaryKey(),
   /** 已分配到的最大序号;reserveSeq 以 `seq = seq + n` 原子递增 */
   seq: bigint('seq', { mode: 'number' }).notNull().default(0),
 });
@@ -366,34 +369,34 @@ export const sync_seq = pgTable('sync_seq', {
  * 存钱计划(需求 V1.1-a,第 32 轮):与预算正交 —— 预算管支出上限,存钱管结余下限。
  * 禁止复用 budgets 表(语义打架,详见需求分析 3.3 方案对比)。
  */
-export const savings_plans = pgTable(
+export const savings_plans = mysqlTable(
   'savings_plans',
   {
-    id: text('id').primaryKey(),
-    ledger_id: text('ledger_id').notNull(),
-    name: text('name').notNull(),
+    id: varchar('id', { length: 128 }).primaryKey(),
+    ledger_id: varchar('ledger_id', { length: 128 }).notNull(),
+    name: varchar('name', { length: 191 }).notNull(),
     /** 目标金额 decimal(18,4) */
-    goal_amount: numeric('goal_amount', { precision: 18, scale: 4 }).notNull(),
+    goal_amount: decimal('goal_amount', { precision: 18, scale: 4 }).notNull(),
     /** 年度/月度 */
-    period_type: text('period_type').notNull().default('yearly'),
+    period_type: varchar('period_type', { length: 191 }).notNull().default('yearly'),
     /** 区间左闭右开(UTC 毫秒) */
     period_start: timeMs('period_start').notNull(),
     period_end: timeMs('period_end').notNull(),
     /** 手动月收入兜底(无 income 流水时强制引导填写,禁止按 0 计算) */
-    expected_income: numeric('expected_income', { precision: 18, scale: 4 }),
+    expected_income: decimal('expected_income', { precision: 18, scale: 4 }),
     /** 基线取样月数(默认 6,最小 3) */
-    baseline_months: integer('baseline_months').notNull().default(6),
+    baseline_months: int('baseline_months').notNull().default(6),
     /** 分解策略:even=纯均分;promo=均分+促销月缓冲 */
-    allocation: text('allocation').notNull().default('even'),
-    /** 促销月数组 jsonb(如 [6,11],默认 618/双11) */
-    promo_months: jsonb('promo_months'),
+    allocation: varchar('allocation', { length: 191 }).notNull().default('even'),
+    /** 促销月数组 json(如 [6,11],默认 618/双11) */
+    promo_months: json('promo_months'),
     /** 促销月支出倍数(默认 1.75,范围 1.0–3.0,越界拒绝保存) */
-    promo_multiplier: numeric('promo_multiplier', { precision: 4, scale: 2 }),
+    promo_multiplier: decimal('promo_multiplier', { precision: 4, scale: 2 }),
     /** 剔除一次性大额(默认 false;如刷漆 926.43 占当月 43% 场景) */
     exclude_oneoff: boolean('exclude_oneoff').notNull().default(false),
     /** 关联储蓄账户(本期不启用,仅占位 —— 口径 2 由 PM 决策不做) */
-    linked_account_id: text('linked_account_id'),
-    status: text('status').notNull().default('active'),
+    linked_account_id: varchar('linked_account_id', { length: 128 }),
+    status: varchar('status', { length: 191 }).notNull().default('active'),
     ...syncCols,
   },
   (t) => [index('savings_ledger_idx').on(t.ledger_id), index('savings_lv_idx').on(t.ledger_id, t.server_version)],

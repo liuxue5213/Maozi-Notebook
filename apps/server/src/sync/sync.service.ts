@@ -40,7 +40,6 @@ const PULL_CONFIG: Array<{ kind: EntityKind; table: any }> = [
   { kind: 'transaction', table: s.transactions },
   { kind: 'budget', table: s.budgets },
   { kind: 'savings_plan', table: s.savings_plans },
-  { kind: 'savings_plan', table: s.savings_plans },
   { kind: 'recurring_rule', table: s.recurring_rules },
   { kind: 'pending_transaction', table: s.pending_transactions },
   { kind: 'debt', table: s.debts },
@@ -149,9 +148,9 @@ export class SyncService {
       try {
         await tx.insert(table).values({ ...payload, id: op.entityId, client_version: op.clientVersion, server_version: nextSeq(), is_deleted: false, created_at: now, updated_at: now });
       } catch (e) {
-        // 并发同 id 插入(第 20 轮 P0-5②):唯一冲突(23505)时重读对方已提交的行转入合并路径,
+        // 并发同 id 插入:MySQL 唯一冲突时重读对方已提交的行转入合并路径,
         // 而非裸抛 500(retryable)让客户端无限重试;其余错误原样上抛
-        if ((e as { code?: string }).code !== '23505') throw e;
+        if ((e as { code?: string }).code !== 'ER_DUP_ENTRY') throw e;
         existing = await readExisting();
         if (!existing) throw e;
         return await this.applyUpdate(tx, userId, op, existing, payload, table, nextSeq, now);
@@ -180,7 +179,7 @@ export class SyncService {
     return this.applyUpdate(tx, userId, op, existing, payload, table, nextSeq, now);
   }
 
-  /** 更新/合并路径(正常更新与并发同 id 插入的 23505 回退共用);前置:existing 已 FOR UPDATE 锁定 */
+  /** 更新/合并路径(正常更新与并发同 id 插入的唯一冲突回退共用);前置:existing 已 FOR UPDATE 锁定 */
   private async applyUpdate(
     tx: any,
     userId: string,
@@ -206,6 +205,7 @@ export class SyncService {
     merged.updated_at = now;
     merged.is_deleted = false; // 覆盖或复活(回收站恢复)
     merged.deleted_at = null;
+    delete merged.active_key; // MySQL 生成列不可显式更新
     await tx.update(table).set(merged).where(eq(table.id, op.entityId));
     await this.recordChange(tx, userId, op, nextSeq, conflicts.length > 0, payload);
     return conflicts.length
@@ -247,14 +247,12 @@ export class SyncService {
               : cfg.kind === 'ledger_member'
                 ? sql`l.user_id = ${userId}`
                 : sql`l.ledger_id in (${ledgers})`;
-          return sql`select ${cfg.kind}::text as entity, l.id::text as id, l.server_version as sv from ${cfg.table} l where l.server_version > ${cursor} and ${scope}`;
+          return sql`select ${cfg.kind} as entity, l.id as id, l.server_version as sv from ${cfg.table} l where l.server_version > ${cursor} and ${scope}`;
         });
         // attachments/budget_items 经父表归属账本(与 PULL_CONFIG 之后的联表口径一致)
-        parts.push(sql`select 'attachment'::text as entity, a.id::text as id, a.server_version as sv from ${s.attachments} a join ${s.transactions} t on t.id = a.transaction_id where a.server_version > ${cursor} and t.ledger_id in (${ledgers})`);
-        parts.push(sql`select 'budget_item'::text as entity, bi.id::text as id, bi.server_version as sv from ${s.budget_items} bi join ${s.budgets} b on b.id = bi.budget_id where bi.server_version > ${cursor} and b.ledger_id in (${ledgers})`);
-        const keys = (
-          await tx.execute(sql`${sql.join(parts, sql` union all `)} order by sv limit ${limit + 1}`)
-        ).rows as Array<{ entity: string; id: string; sv: string | number }>;
+        parts.push(sql`select 'attachment' as entity, a.id as id, a.server_version as sv from ${s.attachments} a join ${s.transactions} t on t.id = a.transaction_id where a.server_version > ${cursor} and t.ledger_id in (${ledgers})`);
+        parts.push(sql`select 'budget_item' as entity, bi.id as id, bi.server_version as sv from ${s.budget_items} bi join ${s.budgets} b on b.id = bi.budget_id where bi.server_version > ${cursor} and b.ledger_id in (${ledgers})`);
+        const [keys] = await tx.execute(sql`${sql.join(parts, sql` union all `)} order by sv limit ${limit + 1}`) as [Array<{ entity: string; id: string; sv: string | number }>, unknown];
 
         // 第二段:按实体批量取完整行(仅取键集命中的行,读取量 = 实际页面大小)
         const byEntity = new Map<EntityKind, string[]>();
@@ -265,9 +263,13 @@ export class SyncService {
         }
         const rowById = new Map<string, PullRow>();
         for (const [entity, ids] of byEntity) {
+          if (entity === 'attachment' || entity === 'budget_item') continue; // 下方按父表归属取行
           const t = PULL_CONFIG.find((c) => c.kind === entity)!.table;
           const rows = await tx.select().from(t).where(inArray(t.id, ids));
-          for (const row of rows) rowById.set(`${entity}:${row.id}`, { entity, row });
+          for (const row of rows) {
+            const { active_key: _internal, ...publicRow } = row;
+            rowById.set(`${entity}:${row.id}`, { entity, row: publicRow });
+          }
         }
         // attachments/budget_items 联表取行(键集已含归属过滤,按 id 直取)
         const attIds = byEntity.get('attachment') ?? [];
@@ -278,7 +280,10 @@ export class SyncService {
         const itemIds = byEntity.get('budget_item') ?? [];
         if (itemIds.length) {
           const rows = await tx.select().from(s.budget_items).where(inArray(s.budget_items.id, itemIds));
-          for (const row of rows) rowById.set(`budget_item:${row.id}`, { entity: 'budget_item', row });
+          for (const row of rows) {
+            const { active_key: _internal, ...publicRow } = row;
+            rowById.set(`budget_item:${row.id}`, { entity: 'budget_item', row: publicRow });
+          }
         }
 
         // 键集已按 sv 全序排列(全局单序号无并列),按序组装页面

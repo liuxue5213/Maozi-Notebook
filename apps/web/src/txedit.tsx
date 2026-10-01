@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { formatAmount, isValidAmount, newId, type TransactionRow, type TransactionType } from '@ledgerone/domain';
 import { db } from './db/db';
-import { enqueue } from './sync/wiring';
+import { saveLocal } from './sync/wiring';
 import { fromLocalInputValue, toLocalInputValue } from './utils/period';
 import { getActiveLedgerId } from './db/seed';
 
@@ -49,9 +49,7 @@ export function TxEditor({ tx, onClose }: { tx: TransactionRow; onClose: () => v
       client_version: tx.client_version + 1,
       updated_at: Date.now(),
     };
-    await db.transactions.put(updated);
-    // base = 打开编辑器时所见的行(tx):服务端三方合并的公共祖先,防陈旧字段覆盖并发修改(第 13 轮)
-    enqueue('transaction', updated as unknown as Record<string, unknown>, 'upsert', tx as unknown as Record<string, unknown>);
+    await saveLocal('transaction', updated as unknown as Record<string, unknown>, 'upsert', tx as unknown as Record<string, unknown>);
     onClose();
   };
 
@@ -77,8 +75,7 @@ export function TxEditor({ tx, onClose }: { tx: TransactionRow; onClose: () => v
       created_at: now,
       updated_at: now,
     };
-    await db.transactions.put(copy);
-    enqueue('transaction', copy as unknown as Record<string, unknown>);
+    await saveLocal('transaction', copy as unknown as Record<string, unknown>);
     onClose();
   };
 
@@ -91,8 +88,7 @@ export function TxEditor({ tx, onClose }: { tx: TransactionRow; onClose: () => v
       client_version: tx.client_version + 1,
       updated_at: Date.now(),
     };
-    await db.transactions.put(updated);
-    enqueue('transaction', updated as unknown as Record<string, unknown>, 'delete');
+    await saveLocal('transaction', updated as unknown as Record<string, unknown>, 'delete');
     onClose();
   };
 

@@ -7,7 +7,7 @@ import {
 } from '@ledgerone/domain';
 import { db } from './db/db';
 import { getActiveLedgerId } from './db/seed';
-import { enqueue } from './sync/wiring';
+import { saveLocal } from './sync/wiring';
 import { runDueRecurring } from './recurring-engine';
 
 const FREQ_LABELS: Record<RecurringFrequency, string> = {
@@ -88,8 +88,7 @@ export function RecurringPage({ onBack }: { onBack: () => void }) {
               className="mini"
               onClick={async () => {
                 const upd: RecurringRuleRow = { ...r, paused: !r.paused, client_version: r.client_version + 1, updated_at: Date.now() };
-                await db.recurring_rules.put(upd);
-                enqueue('recurring_rule', upd as unknown as Record<string, unknown>);
+                await saveLocal('recurring_rule', upd as unknown as Record<string, unknown>);
               }}
             >
               {r.paused ? '恢复' : '暂停'}
@@ -99,8 +98,7 @@ export function RecurringPage({ onBack }: { onBack: () => void }) {
               onClick={async () => {
                 if (!window.confirm('删除该周期规则?已生成的流水不受影响。')) return;
                 const upd: RecurringRuleRow = { ...r, is_deleted: true, deleted_at: Date.now(), client_version: r.client_version + 1, updated_at: Date.now() };
-                await db.recurring_rules.put(upd);
-                enqueue('recurring_rule', upd as unknown as Record<string, unknown>, 'delete');
+                await saveLocal('recurring_rule', upd as unknown as Record<string, unknown>, 'delete');
               }}
             >
               删除
@@ -162,8 +160,7 @@ function RecurringModal({ cats, accounts, onClose }: {
       created_at: now,
       updated_at: now,
     };
-    await db.recurring_rules.put(row);
-    enqueue('recurring_rule', row as unknown as Record<string, unknown>);
+    await saveLocal('recurring_rule', row as unknown as Record<string, unknown>);
     await runDueRecurring();
     onClose();
   };

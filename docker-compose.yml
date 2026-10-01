@@ -1,15 +1,14 @@
 services:
-  postgres:
-    image: postgres:16-alpine
+  mysql:
+    image: mysql:8.4
     environment:
-      POSTGRES_USER: postgres
-      # F-16:生产请通过环境变量覆盖弱口令
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ledgerone}
-      POSTGRES_DB: ledgerone
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-local-root-only}
+      MYSQL_DATABASE: ledgerone
+      MYSQL_USER: ledgerone
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-ledgerone}
     ports:
-      # F-16:仅绑定本机回环,不暴露 0.0.0.0
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:3306:3306"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - mysqldata:/var/lib/mysql
 volumes:
-  pgdata:
+  mysqldata:
