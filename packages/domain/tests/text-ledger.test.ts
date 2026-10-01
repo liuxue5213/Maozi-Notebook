@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildTextLedger, renderTextLedger, shortAmount } from '../src/utils/text-ledger';
+import { buildTextLedger, parseTextLedger, reconcileTextLedger, renderTextLedger, shortAmount } from '../src/utils/text-ledger';
 import type { TransactionRow } from '../src/types';
 
 function tx(day: number, amount: string, note = '', extra: Partial<TransactionRow> = {}): TransactionRow {
@@ -113,5 +113,61 @@ describe('文本账币种口径统一(P0-9,第 27 轮)', () => {
     expect(day2?.entries[0]).toContain('72'); // shortAmount 去尾零;修复前此处为 '10'(原币额)
     expect(Number(day2?.total)).toBe(216); // total 经 addAmount 定点运算
     expect(Number(total)).toBe(216); // 明细 72+144 与合计一致
+  });
+});
+
+describe('T3 加法表达式合并 + 合计行增强 + reconcile(第 31 轮,需求文档 4.3/4.4)', () => {
+  it('T3:「12.9+8.9线」合并为 1 笔 21.80 品名「线」(修复前拆成 5.24 式错行)', () => {
+    const r = parseTextLedger('2026 8月消费\n2  12.9+8.9线');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.data.entries).toHaveLength(1);
+      expect(Number(r.data.entries[0].amount)).toBe(21.8);
+      expect(r.data.entries[0].name).toBe('线');
+    }
+  });
+
+  it('W1 第 3 日样本:「3.6  15  10话费  18包子 5.24+3.39水管」→ 5 笔,水管=8.63', () => {
+    const r = parseTextLedger('2026 8月消费\n3  3.6  15  10话费  18包子 5.24+3.39水管');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.data.entries.map((e) => `${e.amount}|${e.name}`)).toEqual([
+        '3.6|', '15|', '10|话费', '18|包子', '8.63|水管',
+      ]);
+    }
+  });
+
+  it('多加数无品名:「5.4+10+15.8」→ 单笔 31.20', () => {
+    const r = parseTextLedger('2026 8月消费\n5  5.4+10+15.8');
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(Number(r.data.entries[0].amount)).toBe(31.2);
+  });
+
+  it('T7 总校验行:「合计 769油漆 + 386.35 + 286.77 + 357.83 + 371.42 =  2171.37」→ grand=2171.37', () => {
+    const r = parseTextLedger([
+      '2026 8月消费', '1  33.07锅贴', '合计  386.35', '2  12.9+8.9线',
+      '合计  769油漆 + 386.35 + 286.77 + 357.83 + 371.42 =  2171.37',
+    ].join('\n'));
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.data.statedTotals).toContain('386.35');
+      expect(r.data.statedGrandTotal).toBe('2171.37');
+    }
+  });
+
+  it('reconcileTextLedger:W4 样本复算 371.42 vs 标注 361.42 → diff 10.00 且进 unresolvedDiffs', () => {
+    const text = [
+      '2026 8月消费',
+      '1  33.07锅贴  3.6  15',
+      '合计  361.42',  // 故意不平(复算 51.67)
+    ].join('\n');
+    const r = parseTextLedger(text);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const rec = reconcileTextLedger(r.data);
+    const diffWeek = rec.weeks.find((w) => w.stated !== null);
+    expect(diffWeek).toBeTruthy();
+    expect(diffWeek!.diff).not.toBe('0'); // 存在未平差异(复算 51.67 vs 标注 361.42)
+    expect(rec.unresolvedDiffs.length).toBeGreaterThanOrEqual(1);
   });
 });

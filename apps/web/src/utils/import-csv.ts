@@ -1,5 +1,21 @@
 /** 账单 CSV 解析(M05-F01):支持支付宝 / 微信 / 通用预设映射;全部纯字符串处理 */
 
+
+/**
+ * 编码探测与 GBK 回退(IMP-FR-13,第 31 轮/需求第六章):
+ * 支付宝官方账单为 GBK 编码,File.text()/UTF-8 解码会产生 U+FFFD 乱码导致表头探测失败。
+ * 浏览器 WHATWG Encoding 原生支持 GBK 解码,无需依赖。App 端(RN/Hermes)二期接 iconv-lite。
+ */
+export function decodeCsvText(buf: ArrayBuffer): string {
+  const utf8 = new TextDecoder('utf-8').decode(buf);
+  if (!utf8.includes('\uFFFD')) return utf8;
+  try {
+    return new TextDecoder('gbk').decode(buf);
+  } catch {
+    return utf8; // 极端环境无 GBK 解码器:返回原结果交由表头探测报错,不得乱码入池(EX-15)
+  }
+}
+
 export type FieldSlot = 'date' | 'amount' | 'type' | 'merchant' | 'note' | 'none';
 
 export interface ColumnMapping {

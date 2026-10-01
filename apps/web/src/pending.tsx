@@ -8,7 +8,7 @@ import {
 import { db } from './db/db';
 import { getActiveLedgerId } from './db/seed';
 import { enqueue } from './sync/wiring';
-import { defaultMapping, detectSource, findHeaderLineIndex, parseCsv, type ColumnMapping } from './utils/import-csv';
+import { defaultMapping, detectSource, findHeaderLineIndex, parseCsv, type ColumnMapping, decodeCsvText } from './utils/import-csv';
 
 /** 待确认池(P08,M05-F04)+ 账单文件导入向导(M05-F01/F02/F05) */
 export function PendingPage({ onBack }: { onBack: () => void }) {
@@ -220,7 +220,8 @@ function ImportWizard({ onClose, txs }: { onClose: () => void; txs: TransactionR
   const fileRef = useRef<HTMLInputElement>(null);
 
   const loadFile = async (file: File): Promise<void> => {
-    const t = await file.text();
+    // IMP-FR-13(第 31 轮):支付宝账单为 GBK 编码,先 UTF-8 探测再回退 GBK
+    const t = decodeCsvText(await file.arrayBuffer());
     setText(t);
     const src = detectSource(t);
     setSource(src);

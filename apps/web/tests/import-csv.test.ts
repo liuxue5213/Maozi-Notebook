@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaultMapping, detectSource, parseCsv, splitCsvLine } from '../src/utils/import-csv';
+import { decodeCsvText, defaultMapping, detectSource, parseCsv, splitCsvLine } from '../src/utils/import-csv';
 
 const ALIPAY_CSV = `支付宝交易记录明细查询
 账号:xxx@example.com
@@ -58,5 +58,27 @@ describe('CSV 解析(M05-F01)', () => {
     const r = parseCsv(csv, mapping);
     expect(r.rows).toHaveLength(1);
     expect(r.rows[0].happenedAt).toBeGreaterThan(0);
+  });
+});
+
+describe('decodeCsvText 编码探测(IMP-FR-13,第 31 轮/RK-11)', () => {
+  it('UTF-8(含 BOM)直通不转码', () => {
+    const text = '\uFEFF交易时间,金额\n2026-08-01,10.00';
+    const buf = new TextEncoder().encode(text).buffer as ArrayBuffer;
+    // TextDecoder 默认剥 BOM(下游 import 本就 replace 剥 BOM,行为一致)
+    expect(decodeCsvText(buf)).toBe(text.replace('\uFEFF', ''));
+  });
+
+  it('GBK 字节回退解码:中国,10(GBK: D6D0 B9FA)', () => {
+    // 「中国」GBK 编码为 D6D0 B9FA;UTF-8 下为非法序列 → 出现 U+FFFD → 触发 GBK 回退
+    const buf = new Uint8Array([0xd6, 0xd0, 0xb9, 0xfa, 0x2c, 0x31, 0x30]).buffer;
+    const out = decodeCsvText(buf as ArrayBuffer);
+    expect(out).toContain('中国');
+    expect(out).not.toContain('\uFFFD');
+  });
+
+  it('非法序列极端情况:返回最佳努力结果,不抛错(EX-15 不乱码入池由表头探测兜底)', () => {
+    const buf = new Uint8Array([0x81, 0x30]).buffer; // UTF-8 与 GBK 均为非规范序列
+    expect(() => decodeCsvText(buf as ArrayBuffer)).not.toThrow();
   });
 });
