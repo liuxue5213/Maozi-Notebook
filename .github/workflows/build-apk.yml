@@ -99,6 +99,34 @@ jobs:
               if s2 != s:
                   f.write_text(s2)
                   print("kt agp9 patched:", f)
+
+          # 4) AGP 9 发布 DSL 变更:publishing singleVariant / versionName 仅 maven 发布
+          #    路径使用,APK 构建走 canBePublished=false 短路,置空使其可编译
+          pub_file = next(ws.glob("**/expo-module-gradle-plugin/src/**/AndroidLibraryExtension.kt"))
+          ps = pub_file.read_text()
+          old_body = (
+            "internal fun LibraryExtension.applyPublishingVariant() {\n"
+            "  publishing { publishing ->\n"
+            "    publishing.singleVariant(\"release\") {\n"
+            "      withSourcesJar()\n"
+            "    }\n"
+            "  }\n"
+            "}"
+          )
+          new_body = (
+            "internal fun LibraryExtension.applyPublishingVariant() {\n"
+            "  // AGP 9 迁移:publishing DSL 已变更;maven 发布路径不在 APK 构建中使用\n"
+            "}"
+          )
+          assert old_body in ps, "publishing body not found"
+          pub_file.write_text(ps.replace(old_body, new_body))
+          pub2 = next(ws.glob("**/expo-module-gradle-plugin/src/**/MavenPublicationExtension.kt"))
+          ms = pub2.read_text()
+          old_ver = 'version = requireNotNull(project.androidLibraryExtension().defaultConfig.versionName) {'
+          if old_ver in ms:
+              ms = ms.replace(old_ver, 'version = "" // AGP 9: LibraryDefaultConfig 无 versionName(仅 maven 发布路径)')
+          pub2.write_text(ms)
+          print("publishing patched")
           PY
 
       - name: Cache gradle
