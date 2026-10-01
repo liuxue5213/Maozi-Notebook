@@ -28,3 +28,6 @@ playwright-report/
 apps/mobile/assets/app-icon/android/
 apps/mobile/assets/app-icon/ios/
 apps/mobile/assets/app-icon/preview.html
+
+# expo prebuild 生成物:CI 每次重新生成,勿入库
+apps/mobile/android/
