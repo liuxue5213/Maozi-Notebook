@@ -2,7 +2,7 @@ import Dexie, { type Table } from 'dexie';
 import { installFieldEncryption } from '../crypto/secure-fields';
 import { bindSweepTables } from '../crypto/keyring';
 import type {
-  AccountRow, AttachmentRow, BudgetItemRow, BudgetRow, CategoryRow, ChangeOp, DebtRow,
+  AccountRow, AttachmentRow, BudgetItemRow, BudgetRow, CategoryRow, ChangeOp, DebtRow, SavingsPlanRow,
   LedgerMemberRow, LedgerRow, PendingTransactionRow, ReimbursementRow, RecurringRuleRow,
   TagRow, TransactionRow,
 } from '@ledgerone/domain';
@@ -37,6 +37,7 @@ export class LedgerDB extends Dexie {
   debts!: Table<DebtRow, string>;
   reimbursements!: Table<ReimbursementRow, string>;
   outbox!: Table<ChangeOp & { seq?: number }, number>;
+  savings_plans!: Table<SavingsPlanRow, string>;
   deadletter!: Table<DeadLetterEntry, number>;
   meta!: Table<MetaEntry, string>;
 
@@ -67,6 +68,10 @@ export class LedgerDB extends Dexie {
     this.version(3).stores({
       transactions: 'id, ledger_id, happened_at, type, account_id, category_id, server_version, [ledger_id+happened_at]',
     });
+    // v4(第 32 轮):存钱计划(需求 V1.1-a 同步实体)
+    this.version(4).stores({
+      savings_plans: 'id, ledger_id, server_version',
+    });
   }
 }
 
@@ -91,6 +96,7 @@ export const TABLE_BY_ENTITY: Record<string, Table<any, string> | undefined> = {
   tag: db.tags,
   transaction: db.transactions,
   budget: db.budgets,
+  savings_plan: db.savings_plans,
   budget_item: db.budget_items,
   recurring_rule: db.recurring_rules,
   attachment: db.attachments,

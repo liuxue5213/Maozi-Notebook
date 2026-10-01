@@ -98,6 +98,26 @@ export const budgetSchema = z.object({
   rollover: z.boolean().default(false),
 });
 
+/** 存钱计划(需求 V1.1-a,与预算正交:预算管支出上限,存钱管结余下限) */
+export const savingsPlanSchema = z.object({
+  id: idStr,
+  ledger_id: idStr,
+  name: z.string().min(1).max(50),
+  goal_amount: amountStr,
+  period_type: z.enum(['yearly', 'monthly']),
+  period_start: tsNum,
+  period_end: tsNum,
+  expected_income: amountStr.nullable().optional(),
+  baseline_months: z.number().int().min(3).max(12).default(6),
+  allocation: z.enum(['even', 'promo']).default('even'),
+  /** 促销月数组(如 [6,11]),jsonb 存储 */
+  promo_months: z.array(z.number().int().min(1).max(12)).nullable().optional(),
+  promo_multiplier: z.coerce.number().min(1).max(3).optional(), // 客户端以字符串定点传输,归一为数值
+  exclude_oneoff: z.boolean().default(false),
+  linked_account_id: idStr.nullable().optional(),
+  status: z.enum(['active', 'paused', 'achieved', 'archived']).default('active'),
+});
+
 export const budgetItemSchema = z.object({
   id: idStr,
   budget_id: idStr,
@@ -170,6 +190,7 @@ export const entitySchemas: Record<EntityKind, z.ZodTypeAny> = {
   tag: tagSchema,
   transaction: transactionSchema,
   budget: budgetSchema,
+  savings_plan: savingsPlanSchema,
   budget_item: budgetItemSchema,
   recurring_rule: recurringRuleSchema,
   attachment: attachmentSchema,

@@ -3,7 +3,7 @@ import { z } from 'zod';
 /** 可参与同步的实体种类(user 自身走 /me,不在此列) */
 export const ENTITY_KINDS = [
   'ledger', 'ledger_member', 'account', 'category', 'tag', 'transaction', 'budget',
-  'budget_item', 'recurring_rule', 'attachment', 'pending_transaction', 'debt', 'reimbursement',
+  'budget_item', 'savings_plan', 'recurring_rule', 'attachment', 'pending_transaction', 'debt', 'reimbursement',
 ] as const;
 export type EntityKind = (typeof ENTITY_KINDS)[number];
 

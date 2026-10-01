@@ -361,3 +361,40 @@ export const sync_seq = pgTable('sync_seq', {
   /** 已分配到的最大序号;reserveSeq 以 `seq = seq + n` 原子递增 */
   seq: bigint('seq', { mode: 'number' }).notNull().default(0),
 });
+
+/**
+ * 存钱计划(需求 V1.1-a,第 32 轮):与预算正交 —— 预算管支出上限,存钱管结余下限。
+ * 禁止复用 budgets 表(语义打架,详见需求分析 3.3 方案对比)。
+ */
+export const savings_plans = pgTable(
+  'savings_plans',
+  {
+    id: text('id').primaryKey(),
+    ledger_id: text('ledger_id').notNull(),
+    name: text('name').notNull(),
+    /** 目标金额 decimal(18,4) */
+    goal_amount: numeric('goal_amount', { precision: 18, scale: 4 }).notNull(),
+    /** 年度/月度 */
+    period_type: text('period_type').notNull().default('yearly'),
+    /** 区间左闭右开(UTC 毫秒) */
+    period_start: timeMs('period_start').notNull(),
+    period_end: timeMs('period_end').notNull(),
+    /** 手动月收入兜底(无 income 流水时强制引导填写,禁止按 0 计算) */
+    expected_income: numeric('expected_income', { precision: 18, scale: 4 }),
+    /** 基线取样月数(默认 6,最小 3) */
+    baseline_months: integer('baseline_months').notNull().default(6),
+    /** 分解策略:even=纯均分;promo=均分+促销月缓冲 */
+    allocation: text('allocation').notNull().default('even'),
+    /** 促销月数组 jsonb(如 [6,11],默认 618/双11) */
+    promo_months: jsonb('promo_months'),
+    /** 促销月支出倍数(默认 1.75,范围 1.0–3.0,越界拒绝保存) */
+    promo_multiplier: numeric('promo_multiplier', { precision: 4, scale: 2 }),
+    /** 剔除一次性大额(默认 false;如刷漆 926.43 占当月 43% 场景) */
+    exclude_oneoff: boolean('exclude_oneoff').notNull().default(false),
+    /** 关联储蓄账户(本期不启用,仅占位 —— 口径 2 由 PM 决策不做) */
+    linked_account_id: text('linked_account_id'),
+    status: text('status').notNull().default('active'),
+    ...syncCols,
+  },
+  (t) => [index('savings_ledger_idx').on(t.ledger_id), index('savings_lv_idx').on(t.ledger_id, t.server_version)],
+);

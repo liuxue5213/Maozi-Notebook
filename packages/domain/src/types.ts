@@ -169,3 +169,24 @@ export interface ReimbursementRow extends SyncMeta {
   total_amount: string;
   transaction_ids: string[];
 }
+
+/** 存钱计划(需求 V1.1-a,第 32 轮):与预算正交 —— 预算管支出上限,存钱管结余下限 */
+export interface SavingsPlanRow extends SyncMeta {
+  id: string;
+  ledger_id: string;
+  name: string;
+  goal_amount: string;
+  period_type: 'yearly' | 'monthly';
+  period_start: number;
+  period_end: number;
+  /** 手动月收入兜底(无 income 流水时必填并标注来源) */
+  expected_income?: string | null;
+  baseline_months: number;
+  allocation: 'even' | 'promo';
+  promo_months?: number[] | null;
+  promo_multiplier?: string | null;
+  exclude_oneoff: boolean;
+  /** 本期不启用,仅占位 */
+  linked_account_id?: string | null;
+  status: 'active' | 'paused' | 'achieved' | 'archived';
+}

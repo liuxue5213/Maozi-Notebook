@@ -48,3 +48,8 @@ export type DebtDirection = (typeof DEBT_DIRECTIONS)[number];
 
 export const REIMBURSEMENT_STATUSES = ['pending', 'submitted', 'received'] as const;
 export type ReimbursementStatus = (typeof REIMBURSEMENT_STATUSES)[number];
+
+export const SAVINGS_ALLOCATIONS = ['even', 'promo'] as const;
+export type SavingsAllocation = (typeof SAVINGS_ALLOCATIONS)[number];
+export const SAVINGS_PLAN_STATUSES = ['active', 'paused', 'achieved', 'archived'] as const;
+export type SavingsPlanStatus = (typeof SAVINGS_PLAN_STATUSES)[number];

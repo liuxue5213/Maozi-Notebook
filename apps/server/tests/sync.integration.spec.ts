@@ -621,3 +621,35 @@ describe('注销账号(P0-6,第 28 轮)', () => {
     void ids;
   });
 });
+
+describe('存钱计划同步(V1.1-a,第 32 轮):新实体全链路', () => {
+  it('创建 → 上行 applied → 下行可见;软删后下行墓碑', async () => {
+    const { userId } = await register(`sav${Date.now()}@test.dev`);
+    const { ledgerId } = await pullIds(userId);
+    const now = Date.now();
+    const planId = `sp-${now}`;
+    const payload = {
+      id: planId, ledger_id: ledgerId, name: '2026 存 3 万', goal_amount: '30000',
+      period_type: 'yearly', period_start: new Date(2026, 0, 1).getTime(), period_end: new Date(2027, 0, 1).getTime(),
+      expected_income: null, baseline_months: 6, allocation: 'promo', promo_months: [6, 11],
+      promo_multiplier: '1.75', exclude_oneoff: false, linked_account_id: null, status: 'active', client_version: 1,
+    };
+    const up = await syncService.push(userId, [
+      { entity: 'savings_plan', entityId: planId, op: 'upsert', payload, clientVersion: 1, occurredAt: now, deviceId: 't' },
+    ]);
+    expect(up.results[0].status).toBe('applied');
+    // 下行可见
+    const pull = await syncService.pull(userId, 0);
+    const row = pull.rows.find((x) => x.entity === 'savings_plan' && (x.row as any).id === planId);
+    expect(row).toBeTruthy();
+    expect((row!.row as any).goal_amount).toBe('30000.0000');
+    // 软删 → 下行墓碑
+    const del = await syncService.push(userId, [
+      { entity: 'savings_plan', entityId: planId, op: 'delete', payload: { id: planId, ledger_id: ledgerId }, clientVersion: 2, occurredAt: Date.now(), deviceId: 't' },
+    ]);
+    expect(del.results[0].status).toBe('applied');
+    const pull2 = await syncService.pull(userId, 0);
+    const tomb = pull2.rows.find((x) => x.entity === 'savings_plan' && (x.row as any).id === planId);
+    expect((tomb!.row as any).is_deleted).toBe(true);
+  });
+});
