@@ -1,0 +1,22 @@
+{
+  "name": "@ledgerone/sync-client",
+  "version": "0.1.0",
+  "description": "端无关同步客户端接线:apiFetch(401→refresh→单次重试)、auth 端点封装、同步去抖器。Web 与 App 的唯一实现,消除两端口径漂移(Review A1/P1-2)",
+  "type": "module",
+  "main": "./dist-cjs/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.cjs.json && node -e \"require('fs').writeFileSync('dist-cjs/package.json', JSON.stringify({type:'commonjs'}))\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ledgerone/domain": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.2.4"
+  }
+}

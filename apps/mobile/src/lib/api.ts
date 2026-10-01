@@ -1,5 +1,6 @@
 import type { PullResponse, PushResponse, SyncTransport } from '@ledgerone/domain';
 import type { ChangeOp } from '@ledgerone/domain';
+import { createApiClient, type TokenPairLike } from '@ledgerone/sync-client';
 import { metaGet, metaSet } from '@ledgerone/sqlite-sync';
 import * as SecureStore from 'expo-secure-store';
 import { db } from './db';
@@ -16,7 +17,16 @@ export async function getServerUrl(): Promise<string> {
 }
 
 export async function setServerUrl(url: string): Promise<void> {
-  await metaSet(db, 'server_url', url.trim().replace(/\/+$/, ''));
+  // P1-10(Review):协议白名单 + origin 归一(与 Web 对齐)
+  let u = url.trim().replace(/\/+$/, '');
+  if (u && !/^https?:\/\//i.test(u)) u = `http://${u}`;
+  try {
+    const parsed = new URL(u);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return;
+    await metaSet(db, 'server_url', parsed.origin);
+  } catch {
+    return;
+  }
 }
 
 export async function getAccessToken(): Promise<string | null> {
@@ -47,71 +57,30 @@ export async function clearSession(): Promise<void> {
   ]);
 }
 
-export async function isLoggedIn(): Promise<boolean> {
-  return !!(await getAccessToken());
-}
+// ---- 共享客户端(P1-2):apiFetch/401 刷新/auth 端点唯一实现 ----
+const client = createApiClient({
+  getServerUrl,
+  getAccessToken,
+  getRefreshToken,
+  onRefreshed: (pair) => saveSession(pair as Parameters<typeof saveSession>[0]),
+});
 
-export class ApiError extends Error {
-  constructor(
-    public code: string,
-    message: string,
-    public status: number,
-  ) {
-    super(message);
-  }
-}
-
+export const { ApiError, apiFetch, auth } = client;
 export async function logout(): Promise<void> {
-  try {
-    await apiFetch('/v1/auth/logout', { method: 'POST', body: '{}' });
-  } catch {
-    // 服务端不可达也照常清理本地(F-08 语义与 Web 对齐)
-  }
+  await auth.logoutRemote(); // 服务端吊销全部会话(F-08)
   await clearSession();
 }
 
-export async function me(): Promise<Record<string, unknown>> {
-  return apiFetch('/v1/users/me');
-}
-
-async function tryRefresh(): Promise<boolean> {
-  const rt = await getRefreshToken();
-  if (!rt) return false;
-  try {
-    const res = await fetch(`${await getServerUrl()}/v1/auth/refresh`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken: rt }),
-    });
-    if (!res.ok) return false;
-    saveSession(await res.json());
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function apiFetch(path: string, init: RequestInit = {}, retry = true): Promise<Record<string, unknown>> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  const token = await getAccessToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(`${await getServerUrl()}${path}`, { ...init, headers });
-  if (res.status === 401 && retry && (await tryRefresh())) {
-    return apiFetch(path, init, false);
-  }
-  const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-  if (!res.ok) {
-    throw new ApiError(String(body.code ?? `http.${res.status}`), String(body.message ?? `请求失败(${res.status})`), res.status);
-  }
-  return body;
-}
-
 export const authApi = {
-  login: (email: string, password: string) =>
-    apiFetch('/v1/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
-  register: (email: string, password: string) =>
-    apiFetch('/v1/auth/register', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  login: (email: string, password: string) => auth.login(email, password),
+  register: (email: string, password: string) => auth.register(email, password),
+  logoutRemote: auth.logoutRemote,
+  me: auth.me as () => Promise<Record<string, unknown>>,
 };
+
+export async function isLoggedIn(): Promise<boolean> {
+  return !!(await getAccessToken());
+}
 
 export async function makeTransport(): Promise<SyncTransport> {
   return {

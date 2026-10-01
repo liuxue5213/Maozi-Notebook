@@ -1,17 +1,27 @@
-import type { ChangeOp, PullResponse, PushResponse, SyncTransport } from '@ledgerone/domain';
+import { ApiError as ClientApiError, createApiClient, createDebouncer } from '@ledgerone/sync-client';
 
 const SERVER_KEY = 'lo_server';
 const ACCESS_KEY = 'lo_access';
 const REFRESH_KEY = 'lo_refresh';
 const UID_KEY = 'lo_uid';
 
-export function defaultServerUrl(): string {
-  const { protocol, hostname, origin } = window.location;
+export { defaultServerUrl };
+
+export interface SessionUser {
+  id: string;
+  email: string | null;
+  phone: string | null;
+  nickname: string;
+  baseCurrency?: string;
+}
+
+function defaultServerUrl(): string {
+  const { protocol, hostname } = window.location;
   // 开发环境前端 60500 / 后端 60505 分端口;生产同域部署时直接用当前域名
   if (import.meta.env.DEV) {
     return `${protocol}//${hostname}:60505`;
   }
-  return origin;
+  return window.location.origin;
 }
 
 export function getServerBase(): string {
@@ -20,6 +30,7 @@ export function getServerBase(): string {
   if (!stored || stored === 'http://localhost:3000') return defaultServerUrl();
   return stored;
 }
+
 export function setServerBase(v: string): void {
   // P1-10(Review):仅允许 http(s) 绝对地址 —— 修复前可填任意串(如 javascript:/相对路径)
   // 并把 Bearer token 发往不可控目标;协议白名单是最小防线(完整域名白名单需产品级配置)
@@ -33,16 +44,21 @@ export function setServerBase(v: string): void {
     return; // 非法输入静默丢弃,保留原值
   }
 }
-export const getAccessToken = (): string | null => localStorage.getItem(ACCESS_KEY);
-export const isLoggedIn = (): boolean => !!getAccessToken();
-export const getUserId = (): string | null => localStorage.getItem(UID_KEY);
 
-export interface SessionUser {
-  id: string;
-  email: string | null;
-  phone: string | null;
-  nickname: string;
-  baseCurrency?: string;
+export function getAccessToken(): string | null {
+  return localStorage.getItem(ACCESS_KEY);
+}
+export function isLoggedIn(): boolean {
+  return !!getAccessToken();
+}
+export function getUserId(): string | null {
+  return localStorage.getItem(UID_KEY);
+}
+
+export interface TokenPairLike {
+  accessToken: string;
+  refreshToken: string;
+  user?: { id: string; nickname?: string; baseCurrency?: string };
 }
 
 export function saveTokens(data: { accessToken: string; refreshToken: string; user: { id: string; nickname?: string; baseCurrency?: string } }): void {
@@ -58,73 +74,57 @@ export function saveTokens(data: { accessToken: string; refreshToken: string; us
 export function getBaseCurrency(): string {
   return localStorage.getItem('lo_base_currency') ?? 'CNY';
 }
+
 export function clearTokens(): void {
   [ACCESS_KEY, REFRESH_KEY, UID_KEY].forEach((k) => localStorage.removeItem(k));
 }
 
-export class ApiError extends Error {
-  constructor(
-    public code: string,
-    message: string,
-    public status: number,
-  ) {
-    super(message);
-  }
+export interface SessionUser {
+  id: string;
+  email: string | null;
+  phone: string | null;
+  nickname: string;
+  baseCurrency?: string;
 }
 
-async function tryRefresh(): Promise<boolean> {
-  const rt = localStorage.getItem(REFRESH_KEY);
-  if (!rt) return false;
-  try {
-    const res = await fetch(`${getServerBase()}/v1/auth/refresh`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken: rt }),
-    });
-    if (!res.ok) return false;
-    saveTokens(await res.json());
-    return true;
-  } catch {
-    return false;
-  }
-}
+// ---- 共享客户端(P1-2):apiFetch/401 刷新/auth 端点唯一实现 ----
+const client = createApiClient({
+  getServerUrl: getServerBase,
+  getAccessToken,
+  getRefreshToken: () => localStorage.getItem(REFRESH_KEY),
+  onRefreshed: (pair: { accessToken: string; refreshToken: string; user?: unknown }) => saveTokens(pair as Parameters<typeof saveTokens>[0]),
+});
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-async function apiFetch(path: string, init: RequestInit = {}, retry = true): Promise<any> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  const token = getAccessToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(`${getServerBase()}${path}`, { ...init, headers });
-  if (res.status === 401 && retry && (await tryRefresh())) {
-    return apiFetch(path, init, false);
-  }
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new ApiError(body.code ?? `http.${res.status}`, body.message ?? `请求失败(${res.status})`, res.status);
-  }
-  return body;
-}
+/** 同步去抖器(P0-2 对齐):窗口内多次 schedule 合并为一次 syncOnce */
+export const syncDebouncer = createDebouncer(() => {
+  void import('./wiring').then((m) => void m.engine.syncOnce());
+}, 2000);
 
-export const authApi = {
-  register: (email: string, password: string, nickname: string) =>
-    apiFetch('/v1/auth/register', { method: 'POST', body: JSON.stringify({ email, password, nickname }) }),
-  logout: () => apiFetch('/v1/auth/logout', { method: 'POST', body: '{}' }),
-  login: (email: string, password: string) =>
-    apiFetch('/v1/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
-  me: () => apiFetch('/v1/users/me') as Promise<SessionUser>,
-  /** 账号设置(第 16 轮):昵称/主币种;响应为更新后的 publicUser */
-  updateMe: (patch: { nickname?: string; baseCurrency?: string }) =>
-    apiFetch('/v1/users/me', { method: 'PATCH', body: JSON.stringify(patch) }) as Promise<SessionUser & { baseCurrency: string }>,
-  /** 注销账号(P0-6,第 28 轮):密码验证 + 级联软删 + 全端下线;成功后本地 token 需清除 */
-  deleteMe: (password: string) =>
-    apiFetch('/v1/users/me', { method: 'DELETE', body: JSON.stringify({ password }) }) as Promise<{ deleted: true }>,
-};
+export class ApiError extends ClientApiError {}
 
-export function makeTransport(): SyncTransport {
+export const apiFetch = client.apiFetch as (
+  path: string,
+  init?: RequestInit,
+  retry?: boolean,
+) => Promise<Record<string, unknown>>;
+
+/** SyncEngine transport(P0-3/P0-4 全量过滤与批推的传输层,复用共享 apiFetch) */
+export function makeTransport(): { push: (changes: unknown[]) => Promise<unknown>; pull: (cursor: number, limit?: number) => Promise<unknown> } {
   return {
-    push: async (changes: ChangeOp[]): Promise<PushResponse> =>
+    push: (changes: unknown[]): Promise<unknown> =>
       apiFetch('/v1/sync/push', { method: 'POST', body: JSON.stringify({ changes }) }),
-    pull: async (cursor: number, limit?: number): Promise<PullResponse> =>
+    pull: (cursor: number, limit?: number): Promise<unknown> =>
       apiFetch(`/v1/sync/pull?cursor=${cursor}&limit=${limit ?? 500}`),
   };
 }
+
+export const authApi = {
+  login: (email: string, password: string) => client.auth.login(email, password),
+  register: (email: string, password: string, nickname = '') => client.auth.register(email, password, nickname),
+  logoutRemote: client.auth.logoutRemote,
+  logout: client.auth.logoutRemote,
+  me: client.auth.me as unknown as () => Promise<SessionUser>,
+  updateMe: client.auth.updateMe as unknown as (patch: { nickname?: string; baseCurrency?: string }) => Promise<SessionUser & { baseCurrency: string }>,
+  /** 注销账号(P0-6,第 28 轮) */
+  deleteMe: client.auth.deleteMe as (password: string) => Promise<{ deleted: true }>,
+};

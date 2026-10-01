@@ -1,6 +1,8 @@
 import { newId, type ChangeOp, type EntityKind } from '@ledgerone/domain';
 import { SyncEngine } from '@ledgerone/sync';
 import { db, TABLE_BY_ENTITY } from '../db/db';
+import { createDebouncer } from '@ledgerone/sync-client';
+import type { SyncEngineDeps } from '@ledgerone/sync';
 import { getAccessToken, getUserId, makeTransport } from './api';
 
 const DEVICE_KEY = 'lo_device';
@@ -46,7 +48,7 @@ async function applyServerRow(entity: EntityKind, row: Record<string, unknown>):
 }
 
 export const engine = new SyncEngine({
-  transport: makeTransport(),
+  transport: makeTransport() as SyncEngineDeps['transport'],
   queue: {
     take: async (n) => db.outbox.orderBy('seq').limit(n).toArray(),
     ack: async (seqs) => {
@@ -99,12 +101,12 @@ export const engine = new SyncEngine({
   },
 });
 
-let syncTimer: number | undefined;
+/** 去抖器已上提共享包(P1-2):窗口内多次 schedule 合并为一次 syncOnce */
+const debouncer = createDebouncer(() => void engine.syncOnce(), 2000);
 
 export function scheduleSync(delayMs = 2000): void {
   if (!getAccessToken()) return; // 未登录:纯本地模式(PRD M07-F06 的 Web 近似形态,见 README 边界说明)
-  if (syncTimer) clearTimeout(syncTimer);
-  syncTimer = window.setTimeout(() => void engine.syncOnce(), delayMs);
+  debouncer.schedule(delayMs);
 }
 
 async function wipeLocal(): Promise<void> {

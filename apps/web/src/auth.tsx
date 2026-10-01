@@ -40,7 +40,7 @@ export function AuthModal({ onClose, onAuthed }: { onClose: () => void; onAuthed
         mode === 'login'
           ? await authApi.login(email, password)
           : await authApi.register(email, password, nickname);
-      saveTokens(data);
+      saveTokens(data as Parameters<typeof saveTokens>[0]);
       await prepareAfterLogin();
       onAuthed();
     } catch (e) {
