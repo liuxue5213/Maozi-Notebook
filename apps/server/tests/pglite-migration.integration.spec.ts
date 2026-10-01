@@ -30,7 +30,7 @@ it('将旧 PGlite 备份完整导入 MySQL，并拒绝重复导入', async () =>
     const [tbls] = await target.query<mysql.RowDataPacket[]>(
       'SELECT table_name AS tn FROM information_schema.tables WHERE table_schema = DATABASE()',
     );
-    const names = tbls.map((r) => String(r.tn));
+    const names = tbls.map((r) => String(Object.values(r)[0]).toLowerCase());
     expect(names).toEqual(expect.arrayContaining(['__drizzle_migrations', 'sync_seq']));
 
     const source = new PGlite(sourceDir);

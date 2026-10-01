@@ -21,7 +21,8 @@ export async function runMigrations(): Promise<void> {
     const [tables] = await connection.query<mysql.RowDataPacket[]>(
       "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name IN ('users', '__drizzle_migrations')",
     );
-    const names = new Set(tables.map((row) => String(row.table_name)));
+    // MySQL 8.4 列标签大小写不稳定(MariaDB 恒小写),按行值归一而非按键取
+    const names = new Set(tables.map((row) => String(Object.values(row)[0]).toLowerCase()));
     if (names.has('users') && !names.has('__drizzle_migrations')) {
       throw new Error('MySQL 库已有 users 表但没有迁移记录;请先备份并使用空库执行新迁移');
     }

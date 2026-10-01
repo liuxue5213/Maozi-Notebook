@@ -46,10 +46,22 @@ jobs:
           # Gradle 9.4.1 下 expo 内置 gradle 插件的 kotlin-reflect 漂移到 2.3.0,
           # 与其钉死的编译器 2.1.20 元数据不兼容 → 编译器整体对齐到 2.3.0
           F=$(node --print "require.resolve('expo-modules-autolinking/package.json', { paths: [require.resolve('expo/package.json')] })")
-          EXPO_PLUGINS=$(dirname "$F")/android/expo-gradle-plugin
+          export EXPO_PLUGINS=$(dirname "$F")/android/expo-gradle-plugin
           sed -i 's/kotlin("jvm") version "[^"]*"/kotlin("jvm") version "2.3.0"/' "$EXPO_PLUGINS/build.gradle.kts"
           sed -i 's/kotlin("plugin.serialization") version "[^"]*"/kotlin("plugin.serialization") version "2.3.0"/' "$EXPO_PLUGINS/expo-autolinking-plugin-shared/build.gradle.kts"
           grep -h 'kotlin(' "$EXPO_PLUGINS/build.gradle.kts" "$EXPO_PLUGINS/expo-autolinking-plugin-shared/build.gradle.kts"
+          # KGP 2.3 下废弃的 kotlinOptions DSL 在脚本预编译时报错,迁移到 compilerOptions
+          python3 - << 'PY'
+          import os, pathlib, re
+          base = pathlib.Path(os.environ["EXPO_PLUGINS"])
+          pat = re.compile(r"kotlinOptions \{(\s*)jvmTarget = JavaVersion\.VERSION_11\.toString\(\)(\s*)\}")
+          for f in base.glob("**/*.gradle.kts"):
+              s = f.read_text()
+              s2 = pat.sub(r"compilerOptions {\1jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)\2}", s)
+              if s2 != s:
+                  f.write_text(s2)
+                  print("patched", f.name)
+          PY
 
       - name: Cache gradle
         uses: actions/cache@v4

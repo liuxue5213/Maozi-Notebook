@@ -21,6 +21,13 @@ const tables = [
   'audit_logs', 'refresh_tokens', 'phone_codes', 'login_locks',
 ];
 const quote = (name) => `\`${name.replaceAll('`', '``')}\``;
+// MySQL 8.4 的 information_schema 列标签大小写与查询书写不一致(MariaDB 恒为小写),
+// 行键必须归一为小写,否则 CI 上 row.table_name 会取到 undefined
+const normRow = (row) => {
+  const o = {};
+  for (const [k, v] of Object.entries(row)) o[k.toLowerCase()] = v;
+  return o;
+};
 const scaledAmount = (value) => {
   const sign = String(value).startsWith('-') ? -1n : 1n;
   const [whole, fraction = ''] = String(value).replace(/^-/, '').split('.');
@@ -34,7 +41,7 @@ try {
   const [targetTables] = await target.query(
     'SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE()',
   );
-  const targetNames = new Set(targetTables.map((row) => row.table_name));
+  const targetNames = new Set(targetTables.map(normRow).map((row) => String(row.table_name).toLowerCase()));
   if (!targetNames.has('__drizzle_migrations') || !targetNames.has('sync_seq')) {
     throw new Error(`目标库尚未运行 MySQL 迁移;请先在空库启动服务端一次(实际找到 ${targetNames.size} 张表: ${[...targetNames].sort().join(', ') || '无'})`);
   }
@@ -54,10 +61,11 @@ try {
       'SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2',
       ['public', table],
     )).rows.map((row) => row.column_name);
-    const [targetColumns] = await target.query(
+    const [rawTargetColumns] = await target.query(
       'SELECT column_name, data_type, extra FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position',
       [table],
     );
+    const targetColumns = rawTargetColumns.map(normRow);
     const writable = targetColumns.filter((col) => !String(col.extra).includes('GENERATED'));
     const targetSet = new Set(writable.map((col) => col.column_name));
     const missing = sourceColumns.filter((col) => !targetSet.has(col));
