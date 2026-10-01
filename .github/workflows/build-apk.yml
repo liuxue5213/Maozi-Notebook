@@ -45,6 +45,8 @@ jobs:
           cd android
           sed -i 's#gradle-[0-9.]*-bin.zip#gradle-9.4.1-bin.zip#' gradle/wrapper/gradle-wrapper.properties
           sed -i "s/classpath('com.android.tools.build:gradle')/classpath('com.android.tools.build:gradle:9.2.1')/" build.gradle
+          # AGP 9 内置 Kotlin,app 模板里这句会重复注册 'kotlin' 扩展
+          sed -i '/apply plugin: "org.jetbrains.kotlin.android"/d' app/build.gradle
           sed -i "s/proguard-android\.txt/proguard-android-optimize.txt/g" app/build.gradle
           cd ../..
           python3 - << 'PY'
