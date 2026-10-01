@@ -1,10 +1,11 @@
 import { cur } from './utils/currency';
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { addAmount, cmpAmount, forecastMonthEnd, formatAmount, subAmount, type CategoryRow, type TransactionRow } from '@ledgerone/domain';
+import { addAmount, cmpAmount, formatAmount, subAmount, type CategoryRow, type TransactionRow } from '@ledgerone/domain';
+import { buildReportModel, periodRange, type CatAgg, type PeriodKind } from '@ledgerone/ledger-core';
 import { db } from './db/db';
 import { getActiveLedgerId } from './db/seed';
-import { type PeriodKind, periodRange, trendBuckets } from './utils/period';
+
 
 const PERIODS: Array<{ key: PeriodKind; label: string }> = [
   { key: 'day', label: '日' },
@@ -14,11 +15,6 @@ const PERIODS: Array<{ key: PeriodKind; label: string }> = [
 ];
 
 const PALETTE = ['#4361ee', '#e5484d', '#2f9e6e', '#f08c00', '#8e44ad', '#0ea5e9', '#d6336c', '#adb5bd'];
-
-interface CatAgg {
-  amount: string;
-  count: number;
-}
 
 export function Reports() {
   const [period, setPeriod] = useState<PeriodKind>('month');
@@ -32,52 +28,10 @@ export function Reports() {
       const rows = (await db.transactions.where('happened_at').between(start, end, true, false).toArray())
         .filter((r) => !r.is_deleted && r.type !== 'transfer' && r.ledger_id === ledgerId);
       const cats = (await db.categories.where('ledger_id').equals(ledgerId).toArray());
-      const catMap = new Map(cats.map((c) => [c.id, c]));
-      let income = '0';
-      let expense = '0';
-      const byTop = new Map<string, CatAgg>();
-      const byCat = new Map<string, CatAgg>();
-      for (const r of rows) {
-        if (r.type === 'income') income = addAmount(income, r.amount_base);
-        else expense = addAmount(expense, r.amount_base);
-        if (r.type !== kind || !r.category_id) continue;
-        const cat = catMap.get(r.category_id);
-        if (!cat) continue;
-        const topId = cat.parent_id ?? cat.id;
-        const t = byTop.get(topId) ?? { amount: '0', count: 0 };
-        byTop.set(topId, { amount: addAmount(t.amount, r.amount_base), count: t.count + 1 });
-        const c = byCat.get(cat.id) ?? { amount: '0', count: 0 };
-        byCat.set(cat.id, { amount: addAmount(c.amount, r.amount_base), count: c.count + 1 });
-      }
-      const buckets = trendBuckets(period).map((b) => ({
-        label: b.label,
-        amount: rows
-          .filter((r) => r.type === 'expense' && r.happened_at >= b.start && r.happened_at < b.end)
-          .reduce((acc, r) => addAmount(acc, r.amount_base), '0'),
-        isCurrent: Date.now() >= b.start && Date.now() < b.end,
-      }));
-      // 月底预测:近 3 个完整月历史 + 当月已花(forecastMonthEnd)
-      const nowD = new Date();
-      const curStart = periodRange('month').start;
+      // P1-1:聚合编排下沉共享内核(Web 取数 → core 口径 → 渲染;App 直接复用)
       const allExpenses = (await db.transactions.toArray()).filter((r) => !r.is_deleted && r.type === 'expense');
-      const monthUsed = allExpenses
-        .filter((r) => r.happened_at >= curStart)
-        .reduce((acc, r) => addAmount(acc, r.amount_base), '0');
-      const history = [];
-      for (let i = 1; i <= 3; i++) {
-        const ms = new Date(nowD.getFullYear(), nowD.getMonth() - i, 1);
-        const me = new Date(nowD.getFullYear(), nowD.getMonth() - i + 1, 1);
-        const days = new Date(ms.getFullYear(), ms.getMonth() + 1, 0).getDate();
-        const daily: number[] = new Array(days).fill(0);
-        for (const r of allExpenses) {
-          if (r.happened_at >= ms.getTime() && r.happened_at < me.getTime()) {
-            daily[new Date(r.happened_at).getDate() - 1] += Number(r.amount_base);
-          }
-        }
-        history.push({ year: ms.getFullYear(), month: ms.getMonth() + 1, daily });
-      }
-      const forecast = forecastMonthEnd(history, Number(monthUsed), nowD, curStart);
-      return { income, expense, cats, catMap, byTop, byCat, buckets, rows, monthUsed, forecast };
+      const core = buildReportModel({ rows, allExpenses, cats, kind, period, now: Date.now() });
+      return { ...core, cats, catMap: core.catMap };
     },
     [period, kind],
   );
