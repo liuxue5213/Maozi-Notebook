@@ -46,9 +46,19 @@ jobs:
       # 未配置正式签名时 gradle 自动用 debug keystore 签名,可直接安装
       - name: Gradle assembleRelease
         working-directory: apps/mobile/android
+        shell: bash
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon
+          set -o pipefail
+          ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee gradle-build.log
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-log
+          path: apps/mobile/android/gradle-build.log
+          if-no-files-found: ignore
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

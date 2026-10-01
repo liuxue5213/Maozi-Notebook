@@ -161,9 +161,32 @@ function BudgetModal({
     }
     await saveLocal('budget', row as unknown as Record<string, unknown>);
 
+    // 改总预算时,未单独改动的分类额度按比例缩放,合计精确等于新总额(取整余数补给最大项);
+    // 用户本轮手动改过/清空的条目保持其意图不动
+    const drafts: Record<string, string> = { ...itemDrafts };
+    const oldTotal = original ? Number(original.total_amount) : NaN;
+    const newTotal = Number(amount);
+    if (original && originalItems.length > 0 && oldTotal > 0 && newTotal > 0 && oldTotal !== newTotal) {
+      const untouched = originalItems
+        .map((it) => {
+          const d = drafts[it.category_id]?.trim() ?? '';
+          return { catId: it.category_id, old: Number(d), raw: d };
+        })
+        .filter((u) => u.raw !== '' && isValidAmount(u.raw) && u.old > 0 && u.old === Number(u.old));
+      const oldSum = untouched.reduce((s, u) => s + u.old, 0);
+      if (oldSum > 0 && untouched.length > 0) {
+        const scaled = untouched.map((u) => ({ ...u, val: Math.max(1, Math.round((u.old * newTotal) / oldSum)) }));
+        const biggest = scaled.reduce((a, b) => (b.old > a.old ? b : a));
+        const drift = newTotal - scaled.reduce((s, u) => s + u.val, 0);
+        biggest.val = Math.max(0, biggest.val + drift);
+        for (const u of scaled) drafts[u.catId] = String(u.val);
+        setItemDrafts(drafts);
+      }
+    }
+
     // 分类条目 diff:新填/改额 → upsert;清空 → 软删除
     for (const cat of topCats) {
-      const draft = itemDrafts[cat.id]?.trim() ?? '';
+      const draft = drafts[cat.id]?.trim() ?? '';
       const existing = originalItems.find((i) => i.category_id === cat.id);
       if (draft === '') {
         if (existing) {
@@ -249,7 +272,22 @@ function BudgetModal({
           结转上月剩余(超支不倒扣)
         </label>
         <div className="field">
-          <label>分类预算(可选,常用分类)</label>
+          <label>
+            分类预算(可选,常用分类)
+            {(() => {
+              const catSum = Object.values(itemDrafts).reduce(
+                (s, v) => (v && isValidAmount(v.trim()) && Number(v) > 0 ? s + Number(v) : s), 0);
+              const totalNum = Number(amount);
+              if (!(catSum > 0) || !(totalNum > 0)) return null;
+              const over = catSum > totalNum;
+              return (
+                <span className={`muted small${over ? ' warn-text' : ''}`}>
+                  {' '}· 合计 ¥{formatAmount(String(catSum))} / 总 ¥{formatAmount(String(totalNum))}
+                  {over ? '(分类合计超过总预算)' : ''}
+                </span>
+              );
+            })()}
+          </label>
           <div className="budget-cat-list">
             {(topCats ?? []).map((c: CategoryRow) => (
               <div key={c.id} className="budget-cat-row">
