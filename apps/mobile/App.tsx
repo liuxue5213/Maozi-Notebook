@@ -46,7 +46,7 @@ export default function App() {
 
   return (
     <View style={styles.app}>
-      <Text style={styles.title}>随手账</Text>
+      <Text style={styles.title}>帽子记账本</Text>
       <View style={styles.content}>
         {tab === 'record' && (
           <RecordScreen onSaved={() => void refreshTxs()} />

@@ -103,7 +103,7 @@ export function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <div className="title">随手账</div>
+        <div className="title">帽子记账本</div>
         <button className="sync-badge" data-state={sync.state} onClick={() => void engine.syncOnce()}>
           {badge}
         </button>

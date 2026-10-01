@@ -155,7 +155,7 @@ function LockOverlay({ onUnlock }: { onUnlock: () => void }) {
     <div className="lock-mask">
       <div className="lock-card">
         <div className="lock-icon">🔒</div>
-        <div className="lock-title">随手账已锁定</div>
+        <div className="lock-title">帽子记账本已锁定</div>
         <input
           className="lock-input"
           type="password"
