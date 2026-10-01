@@ -51,8 +51,8 @@ jobs:
           sed -i '/apply plugin: "org.jetbrains.kotlin.android"/d' app/build.gradle
           # AGP 9 移除了 proguard-android.txt(含 -dontoptimize)
           sed -i "s/proguard-android\.txt/proguard-android-optimize.txt/g" app/build.gradle
-          cd ../..
-          node scripts/patch-expo-agp9.mjs "$GITHUB_WORKSPACE"
+          # 补丁脚本用绝对路径调用:此处 cwd 已切到 android/,相对路径会解析成 apps/scripts/ 而找不到文件
+          node "$GITHUB_WORKSPACE/apps/mobile/scripts/patch-expo-agp9.mjs" "$GITHUB_WORKSPACE"
 
       - name: Cache gradle
         uses: actions/cache@v4
