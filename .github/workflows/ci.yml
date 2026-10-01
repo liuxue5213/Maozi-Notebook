@@ -8,14 +8,15 @@ jobs:
   build-test:
     runs-on: ubuntu-latest
     services:
+      # 与生产部署(树莓派 MariaDB 10.11)保持同库同版,避免 MySQL/MariaDB 行为差异
       mysql:
-        image: mysql:8.4
+        image: mariadb:10.11
         env:
           MYSQL_ROOT_PASSWORD: test-root
         ports:
           - 3306:3306
         options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -u root -ptest-root"
+          --health-cmd="mariadb-admin ping -h 127.0.0.1 -u root -ptest-root"
           --health-interval=5s --health-timeout=5s --health-retries=20
     env:
       TEST_MYSQL_URL: mysql://root:test-root@127.0.0.1:3306/mysql
