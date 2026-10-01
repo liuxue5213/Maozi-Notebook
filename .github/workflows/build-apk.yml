@@ -1,0 +1,57 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # packageManager 字段锁定 pnpm@11.9.0
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages (domain/sync/sqlite-sync/sync-client)
+        run: pnpm exec turbo run build --filter=@ledgerone/mobile...
+
+      - name: Expo prebuild (generate android project)
+        working-directory: apps/mobile
+        run: pnpm exec expo prebuild -p android --no-install
+
+      - name: Cache gradle
+        uses: actions/cache@v4
+        with:
+          path: ~/.gradle/caches
+          key: gradle-${{ hashFiles('apps/mobile/android/gradle/wrapper/gradle-wrapper.properties', 'apps/mobile/android/build.gradle', 'apps/mobile/android/app/build.gradle') }}
+          restore-keys: gradle-
+
+      # release 变体才会打进完整 JS bundle(离线可跑,不依赖 metro);
+      # 未配置正式签名时 gradle 自动用 debug keystore 签名,可直接安装
+      - name: Gradle assembleRelease
+        working-directory: apps/mobile/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MaoziNotebook-APK
+          path: apps/mobile/android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error

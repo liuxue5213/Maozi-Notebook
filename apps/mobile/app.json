@@ -7,7 +7,12 @@
     "userInterfaceStyle": "light",
     "backgroundColor": "#f6f7f9",
     "plugins": [
-      ["expo-sqlite", { "useSQLCipher": true }]
+      [
+        "expo-sqlite",
+        {
+          "useSQLCipher": true
+        }
+      ]
     ],
     "ios": {
       "supportsTablet": true,
@@ -21,8 +26,15 @@
     "android": {
       "package": "com.ledgerone.app",
       "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#4361ee"
       }
+    },
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#4361ee"
     }
   }
 }
