@@ -23,3 +23,8 @@ playwright-report/
 
 # Playwright 共享登录态
 **/e2e/.auth/
+
+# 图标生成器的一次性产物:构建时 expo prebuild 会从 assets/*.png 重新生成,仓库只留 source
+apps/mobile/assets/app-icon/android/
+apps/mobile/assets/app-icon/ios/
+apps/mobile/assets/app-icon/preview.html
