@@ -42,6 +42,9 @@ jobs:
           cd android
           sed -i 's#gradle-[0-9.]*-bin.zip#gradle-9.4.1-bin.zip#' gradle/wrapper/gradle-wrapper.properties
           grep distributionUrl gradle/wrapper/gradle-wrapper.properties
+          # AGP 9.x 内置 Kotlin 支持,模板里旧式 apply kotlin.android 会重复注册 'kotlin' 扩展
+          sed -i '/apply plugin: "org.jetbrains.kotlin.android"/d' app/build.gradle
+          grep -c "kotlin.android" app/build.gradle || echo "kotlin.android 行已移除"
 
       # Gradle 9.4.1 自带 Kotlin 2.3.0(lib/kotlin-reflect-2.3.0.jar),expo/RN 内置 gradle 插件
       # 只要还用旧版 Kotlin 编译就会元数据不兼容(internal compiler error)→ 全部对齐到 2.3.0
