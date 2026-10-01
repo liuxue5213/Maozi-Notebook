@@ -39,13 +39,21 @@ test('明细大数据量:限外老流水可搜到 + 截断提示 + 计数不失�
   });
   expect(seeded).toBeGreaterThanOrEqual(550);
 
-  // ② 无筛选:分页加载 —— 首批 50/共 550,「加载更多」逐批递增(P0-4 UI)
+  // ② 无筛选:分页加载 —— 首批 50/共 550;滑到底哨兵触发自动加载下一批(P0-4 无限滚动)
   await page.getByRole('navigation').getByRole('button', { name: /明细/ }).click();
-  await expect(page.getByText(/已加载 50 .* 共 550 条命中/)).toBeVisible({ timeout: 15_000 });
-  const loadMore = page.getByRole('button', { name: '加载更多' });
-  await expect(loadMore).toBeVisible();
-  await loadMore.click(); // +50
-  await expect(page.getByText(/已加载 100 .* 共 550 条命中/)).toBeVisible({ timeout: 15_000 });
+  await page.waitForTimeout(1200);
+  console.log('[dbg]', (await page.locator('.tx-list-wrap').innerText()).slice(0, 300).replace(/\n/g, '|'));
+  await expect(page.getByText(/已加载 50 \/ 550 条/)).toBeVisible({ timeout: 15_000 });
+  // .app 为 min-height:100%(随内容撑高),实际滚动发生在 window;.content 因不溢出而 scrollTop 恒 0
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await page.waitForTimeout(800);
+  console.log('[dbg-scroll]', await page.evaluate(() => {
+    const c = document.querySelector('.content');
+    const el = document.querySelector('[data-testid=load-more-sentinel]');
+    const r = el ? el.getBoundingClientRect() : null;
+    return `scrollTop=${c ? Math.round(c.scrollTop) : -1} scrollH=${c ? Math.round(c.scrollHeight) : -1} sentinel=${r ? Math.round(r.top) : 'none'}`;
+  }));
+  await expect(page.getByText(/已加载 100 \/ 550 条/)).toBeVisible({ timeout: 15_000 });
 
   // ① 修复核心:关键词搜「bulk-0010」(第 11 新 → 展示上限之外的老流水)必须命中
   await page.getByRole('button', { name: /筛选/ }).click();

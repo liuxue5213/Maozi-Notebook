@@ -1,5 +1,5 @@
 import { cur } from './utils/currency';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { addAmount, formatAmount, subAmount, type CategoryRow, type TransactionRow } from '@ledgerone/domain';
 import { db } from './db/db';
@@ -152,7 +152,7 @@ export function TransactionList() {
   const [view, setView] = useState<'active' | 'recycle' | 'calendar'>('active');
   const [filterOpen, setFilterOpen] = useState(false);
   const [filter, setFilter] = useState<TxFilter>(EMPTY_FILTER);
-  const [loaded, setLoaded] = useState(TX_PAGE_SIZE); // P0-4:增量加载,「加载更多」递增
+  const [loaded, setLoaded] = useState(TX_PAGE_SIZE); // P0-4:增量加载,滑到底自动递增
   useEffect(() => setLoaded(TX_PAGE_SIZE), [filter]); // 筛选变化回首批
 
   const activeData = useLiveQuery(async () => {
@@ -208,6 +208,22 @@ export function TransactionList() {
   };
 
   const filterCount = activeFilterCount(filter);
+  const hasMore = !!activeData?.hasMore;
+
+  // P0-4 无限滚动:哨兵进入视口自动加载下一批(滑到底即加载,无需手动点按钮)
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !hasMore) return;
+    const io = new IntersectionObserver(
+      (es) => {
+        if (es.some((e) => e.isIntersecting)) setLoaded((n) => n + TX_PAGE_SIZE);
+      },
+      { rootMargin: '120px' },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasMore, view]);
 
   return (
     <div className="tx-list-wrap">
@@ -236,11 +252,11 @@ export function TransactionList() {
         <FilterPanel filter={filter} onChange={setFilter} cats={activeData.catMap ? [...activeData.catMap.values()] : []} accounts={activeData.accounts} />
       )}
 
-      {view === 'active' && activeData?.hasMore && (
-        <div className="banner" role="status" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>已加载 {activeData.rows.length} / 共 {activeData.matchedTotal} 条命中</span>
-          <button className="mini" onClick={() => setLoaded((n) => n + TX_PAGE_SIZE)}>加载更多</button>
-        </div>
+      {view === 'active' && activeData && (
+        <span className="muted small" style={{ alignSelf: 'center' }}>
+          已加载 {Math.min(activeData.rows.length, loaded)} / {activeData.matchedTotal} 条
+          {activeData.hasMore ? ' · 上滑加载更多' : ''}
+        </span>
       )}
 
       {view === 'active' && (
@@ -273,6 +289,7 @@ export function TransactionList() {
                   })}
                 </section>
               ))}
+              {hasMore && <div ref={sentinelRef} data-testid="load-more-sentinel" style={{ height: 8 }} />}
             </div>
           ) : (
             <div className="placeholder">
