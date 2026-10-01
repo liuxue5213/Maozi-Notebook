@@ -1,7 +1,8 @@
 import type { SyncTransport } from '@ledgerone/domain';
-import { SyncEngine, type SyncEngineSnapshot } from '@ledgerone/sync';
+import { SyncEngine, startAutoSync, type SyncEngineSnapshot } from '@ledgerone/sync';
 import { addDeadLetter, createChangeQueue, createRowSink, saveLocal, type AnyRow } from '@ledgerone/sqlite-sync';
 import { newId, type TransactionRow } from '@ledgerone/domain';
+import { AppState } from 'react-native';
 import { db } from './db';
 import { getAccessToken, makeTransport } from './api';
 
@@ -52,12 +53,38 @@ export function snapshot(): SyncEngineSnapshot {
   return engine.getSnapshot();
 }
 
-/** 未登录不发起同步(纯本地);登录后 2s 去抖批量上行 */
+/** 未登录不发起同步(纯本地) */
+async function hasToken(): Promise<boolean> {
+  return !!(await getAccessToken());
+}
+
+/** P0-2(第 27 轮):真去抖 —— 修复前每次新建 setTimeout,连续记 5 笔会并发 5 次同步 */
+let syncTimer: ReturnType<typeof setTimeout> | undefined;
+
 export function scheduleSync(delayMs = 2000): void {
-  void getAccessToken().then((token) => {
-    if (!token) return;
-    setTimeout(() => {
+  void (async () => {
+    if (!(await hasToken())) return;
+    if (syncTimer) clearTimeout(syncTimer);
+    syncTimer = setTimeout(() => {
+      syncTimer = undefined;
       void engine.syncOnce();
     }, delayMs);
+  })();
+}
+
+/**
+ * P0-2(第 27 轮):定时兜底(5 分钟)+ 进前台立即补同步(AppState)。
+ * 与 Web 的 visibilitychange/online 监听对齐;网络状态由同步失败重试自然兜底(离线优先)。
+ */
+let cachedToken = false;
+export function refreshLoginCache(): void {
+  void hasToken().then((t) => (cachedToken = t));
+}
+export function startMobileAutoSync(): void {
+  startAutoSync(engine, { isOnline: () => cachedToken });
+  const sub = AppState.addEventListener('change', (state) => {
+    refreshLoginCache();
+    if (state === 'active' && cachedToken) void engine.syncOnce();
   });
+  void sub; // RN AppState subscription;应用生命周期内常驻
 }

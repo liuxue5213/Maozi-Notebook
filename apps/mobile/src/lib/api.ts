@@ -61,6 +61,19 @@ export class ApiError extends Error {
   }
 }
 
+export async function logout(): Promise<void> {
+  try {
+    await apiFetch('/v1/auth/logout', { method: 'POST', body: '{}' });
+  } catch {
+    // 服务端不可达也照常清理本地(F-08 语义与 Web 对齐)
+  }
+  await clearSession();
+}
+
+export async function me(): Promise<Record<string, unknown>> {
+  return apiFetch('/v1/users/me');
+}
+
 async function tryRefresh(): Promise<boolean> {
   const rt = await getRefreshToken();
   if (!rt) return false;

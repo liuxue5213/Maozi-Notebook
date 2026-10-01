@@ -10,12 +10,20 @@ import { db, initEncryptedDb } from './db';
 
 let ready: Promise<void> | null = null;
 
-/** 启动:打开加密库(SQLCipher)→ 建表 + 本地播种(离线开箱可用,登录后与服务端收敛) */
+/**
+ * 启动:打开加密库(SQLCipher)→ 建表 + 本地播种(离线开箱可用,登录后与服务端收敛)。
+ * P0-7:失败时清空 ready 缓存并上抛 —— 修复前 rejected promise 被永久缓存导致白屏不可恢复。
+ */
 export function initDb(): Promise<void> {
   ready ??= (async () => {
-    await initEncryptedDb();
-    await initSchema(db);
-    await ensureSeed();
+    try {
+      await initEncryptedDb();
+      await initSchema(db);
+      await ensureSeed();
+    } catch (e) {
+      ready = null;
+      throw e;
+    }
   })();
   return ready;
 }

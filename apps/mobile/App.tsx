@@ -2,9 +2,10 @@ import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { formatAmount, newId, type TransactionRow, type TransactionType } from '@ledgerone/domain';
 import { useSyncExternalStore } from 'react';
-import { engine, scheduleSync, snapshot } from './src/lib/sync';
+import { engine, scheduleSync, snapshot, startMobileAutoSync } from './src/lib/sync';
 import { initDb, listRecent, saveTx, topCategories, getActiveLedgerId, metaGet, metaSet, db } from './src/lib/store';
-import { authApi, clearSession, getServerUrl, isLoggedIn, saveSession, setServerUrl } from './src/lib/api';
+import { prepareAfterLogin } from '@ledgerone/sqlite-sync';
+import { authApi, clearSession, getServerUrl, isLoggedIn, logout as logoutAll, saveSession, setServerUrl } from './src/lib/api';
 
 type Tab = 'record' | 'list' | 'me';
 
@@ -31,6 +32,7 @@ export default function App() {
       await refreshTxs();
       setLogged(await isLoggedIn());
       setReady(true);
+      startMobileAutoSync(); // P0-2:定时兜底 + 进前台补同步
     });
   }, [refreshTxs]);
 
@@ -175,9 +177,12 @@ function MeScreen({ logged, onLogged, syncText }: { logged: boolean; onLogged: (
       await setServerUrl(server);
       let data = await authApi.login(email, password).catch(() => authApi.register(email, password));
       saveSession(data as never);
+      // P0-1(第 27 轮):三态换号处理(明确换号清库/纯本地保留/残留清库),与 Web 同策略
+      const action = await prepareAfterLogin(db, String((data as { user?: { id?: string } }).user?.id ?? ''));
       onLogged(true);
-      setMsg('登录成功,同步已开启');
-      setTimeout(() => void engine.syncOnce(), 300);
+      setMsg(action === 'wiped' ? '检测到账号切换,已清空本地数据并重新同步' : '登录成功,同步已开启');
+      await initDb(); // 清库后重播种/重初始化
+      void engine.syncOnce();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : String(e));
     } finally {
@@ -186,7 +191,7 @@ function MeScreen({ logged, onLogged, syncText }: { logged: boolean; onLogged: (
   };
 
   const logout = async () => {
-    await clearSession();
+    await logoutAll(); // 服务端吊销全部会话(F-08)
     onLogged(false);
     setMsg('已退出(本地数据保留)');
   };

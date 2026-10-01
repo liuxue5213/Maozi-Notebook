@@ -51,7 +51,9 @@ export function buildTextLedger(
     const note = (r.note ?? '').trim();
     const cat = r.category_id ? (categoryNameOf?.(r.category_id) ?? '').trim() : '';
     const name = note || cat;
-    e.entries.push(`${shortAmount(r.amount)}${name}`);
+    // P0-9(第 27 轮):明细与合计统一取折算主币种金额 amount_base —— 修复前明细 r.amount、
+    // 合计 r.amount_base,单币种无感,多币种下导出账肉眼不平且与手写原稿核对不上
+    e.entries.push(`${shortAmount(r.amount_base)}${name}`);
     e.total = addAmount(e.total, r.amount_base);
     byDay.set(day, e);
   }

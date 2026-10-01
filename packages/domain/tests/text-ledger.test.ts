@@ -92,3 +92,26 @@ describe('文本草账(2026 年 9 月,周二开月)', () => {
     expect(text).toBe('2026 10月消费\n\n合计  0\n');
   });
 });
+
+describe('文本账币种口径统一(P0-9,第 27 轮)', () => {
+  it('明细行与合计统一取 amount_base:折算额 ≠ 原币额时导出账自洽', () => {
+    // USD 10 → 折算 CNY 72:明细应写 72(与合计一致),修复前明细写 10、合计 72,肉眼不平
+    const tx = (id: string, amt: string, base: string, day: number): TransactionRow => ({
+      id, ledger_id: 'l1', user_id: 'u', member_id: null, type: 'expense', amount: amt,
+      currency: 'USD', amount_base: base, exchange_rate: '7.2', category_id: null,
+      account_id: 'a1', to_account_id: null, happened_at: new Date(2026, 4, day).getTime(),
+      note: `item-${id}`, is_refunded: false, refund_of_id: null, reimburse_status: null,
+      exclude_from_budget: false, attachment_count: 0, source: 'manual',
+      client_version: 1, server_version: null, is_deleted: false, deleted_at: null,
+      created_at: 1, updated_at: 1,
+    });
+    const { weeks, total } = buildTextLedger(
+      [tx('a', '10', '72.00', 2), tx('b', '20', '144.00', 2)],
+      2026, 5,
+    );
+    const day2 = weeks.flatMap((w) => w.days).find((d) => d.day === 2);
+    expect(day2?.entries[0]).toContain('72'); // shortAmount 去尾零;修复前此处为 '10'(原币额)
+    expect(Number(day2?.total)).toBe(216); // total 经 addAmount 定点运算
+    expect(Number(total)).toBe(216); // 明细 72+144 与合计一致
+  });
+});

@@ -6,15 +6,18 @@ import type { AnyRow, SQLiteLike } from './types';
 import { decodeRow, initSchemaSql, TABLES, upsertSql } from './tables';
 
 export { initSchemaSql, TABLES, decodeRow, normalizeValue, upsertSql } from './tables';
+export { prepareAfterLogin, wipeAllTables } from './login-policy';
 export type { SQLiteLike, AnyRow } from './types';
 
 export async function initSchema(db: SQLiteLike): Promise<void> {
   await db.execAsync(initSchemaSql());
-  // 旧库幂等迁移(第 18 轮):outbox.base 列(三方合并编辑基线快照);列已存在时静默忽略
-  try {
-    await db.execAsync('ALTER TABLE outbox ADD COLUMN base TEXT');
-  } catch {
-    /* column already exists */
+  // 旧库幂等迁移(第 18/27 轮):outbox.base(三方合并编辑基线整行)+ base_version(编辑时所见证号)
+  for (const col of ['base TEXT', 'base_version BIGINT']) {
+    try {
+      await db.execAsync(`ALTER TABLE outbox ADD COLUMN ${col}`);
+    } catch {
+      /* column already exists */
+    }
   }
 }
 
@@ -55,9 +58,14 @@ export async function enqueueChange(
   deviceId?: string,
   base?: AnyRow | null,
 ): Promise<void> {
+  // P0-2(第 27 轮):补 base_version —— 编辑时所见的 server_version,服务端三方合并的并发判定输入
   await db.runAsync(
-    'INSERT INTO outbox (entity, entity_id, op, payload, client_version, occurred_at, device_id, base) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [entity, String(row.id), op, JSON.stringify(row), Number(row.client_version ?? 1), Date.now(), deviceId ?? '', base ? JSON.stringify(base) : null],
+    'INSERT INTO outbox (entity, entity_id, op, payload, client_version, occurred_at, device_id, base, base_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [
+      entity, String(row.id), op, JSON.stringify(row), Number(row.client_version ?? 1), Date.now(), deviceId ?? '',
+      base ? JSON.stringify(base) : null,
+      row.server_version == null ? null : Number(row.server_version),
+    ],
   );
 }
 
@@ -67,7 +75,7 @@ export function createChangeQueue(db: SQLiteLike) {
     async take(limit: number): Promise<ChangeOp[]> {
       const rows = await db.getAllAsync<{
         seq: number; entity: string; entity_id: string; op: string; payload: string;
-        client_version: number; occurred_at: number; device_id: string; base: string | null;
+        client_version: number; occurred_at: number; device_id: string; base: string | null; base_version: number | null;
       }>('SELECT * FROM outbox ORDER BY seq LIMIT ?', [limit]);
       return rows.map((r) => ({
         seq: r.seq,
@@ -77,6 +85,7 @@ export function createChangeQueue(db: SQLiteLike) {
         payload: JSON.parse(r.payload) as Record<string, unknown>,
         clientVersion: r.client_version,
         base: r.base ? (JSON.parse(r.base) as Record<string, unknown>) : null,
+        baseVersion: r.base_version == null ? null : Number(r.base_version),
         occurredAt: r.occurred_at,
         deviceId: r.device_id ?? '',
       }));

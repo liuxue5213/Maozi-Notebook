@@ -35,14 +35,31 @@ let real: SQLiteLike | null = null;
  * 打开加密库(F-05 / M16-F02):
  * 1) app.json 配置 expo-sqlite 插件 useSQLCipher:true(编译期启用 SQLCipher);
  * 2) 打开后第一条语句必须是 PRAGMA key(SQLCipher 约定),密钥为 SecureStore 中的 32 字节 raw key。
- * 注意:此前以明文创建的旧库无法用密钥打开(「file is not a database」),需卸载重装/删库重来 —— 当前骨架未发布,无迁移负担。
+ * P0-7(第 27 轮):PRAGMA key 后执行 sqlite_master 握手 —— 密钥错误/库损坏时立刻抛错,
+ * 而不是等到首次业务查询才失败(initDb 缓存 rejected promise 导致永久白屏)。
  */
 export async function initEncryptedDb(): Promise<void> {
   if (real) return;
   const key = await loadDbKey();
   const conn = SQLite.openDatabaseSync('ledgerone.db');
   await conn.execAsync(`PRAGMA key = "x'${key}'";`);
+  await conn.execAsync('SELECT count(*) FROM sqlite_master'); // 握手:密钥/库完整性即时校验
   real = wrap(conn);
+}
+
+/** P0-7 自愈:删除本地库文件(密钥错乱/库损坏时由用户显式触发,重置后重新播种) */
+export async function resetLocalDatabase(): Promise<void> {
+  real = null;
+  try {
+    SQLite.openDatabaseSync('ledgerone.db').execSync('PRAGMA close;');
+  } catch {
+    /* 可能未打开 */
+  }
+  try {
+    SQLite.deleteDatabaseSync?.('ledgerone.db');
+  } catch {
+    /* 文件可能不存在 */
+  }
 }
 
 /**
