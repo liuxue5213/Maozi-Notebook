@@ -25,7 +25,9 @@
  *      而 9 个未显式关闭发布的模块会去读它 → SoftwareComponent not found)
  *   6. 为"声明了 buildConfigField 却未开启 buildConfig"的模块补开关
  *      (AGP 9 下 library 的 buildConfig 默认关闭;@expo/log-box 漏开)
- *   7. 在生成工程的 gradle.properties 里设 android.sourceset.disallowProvider=false
+ *   7. 给 expo-modules-core 补 ${REACT_NATIVE_DIR}/ReactCommon 头文件路径
+ *      (RN 0.87 的 cxxreact/ErrorUtils.h 变为转发头,需 jserrorhandler/)
+ *   8. 在生成工程的 gradle.properties 里设 android.sourceset.disallowProvider=false
  *      (expo-autolinking 仍向 sourceSets 传 Provider,AGP 9 默认禁止)
  *
  * 幂等:重复运行无副作用(第二次运行 patched 数为 0)。
@@ -204,7 +206,40 @@ for (const f of androidBuildGradle) enableBuildConfig(f);
 const appModuleGradle = path.join(root, 'apps/mobile/android/app/build.gradle');
 if (fs.existsSync(appModuleGradle)) enableBuildConfig(appModuleGradle);
 
-// ---- 7) 放行"Provider 形式的 sourceSets"(AGP 9 默认禁止) ----
+// ---- 7) 给 expo-modules-core 补 ReactCommon 头文件路径(RN 0.87 头文件搬迁) ----
+// RN 0.87 把 ReactCommon/cxxreact/ErrorUtils.h 改成了转发头:
+//     #warning Deprecated: use <jserrorhandler/ErrorUtils.h> instead.
+//     #include <jserrorhandler/ErrorUtils.h>
+// 而 jserrorhandler/ 只在 ${REACT_NATIVE_DIR}/ReactCommon 下,不在 prefab 里。
+// expo 原本只在 REACT_NATIVE_WORKLETS_DIR 存在(装了 reanimated/worklets)时才加这条路径,
+// 本工程没装 worklets → 缺失 → clang: fatal error: 'jserrorhandler/ErrorUtils.h' file not found。
+// 这里把该路径无条件加到 expo-modules-core 的 include 列表(与 expo 自己的 worklets 分支同一写法)。
+const expoCmake = allFiles.find(
+  (f) => norm(f).endsWith('expo-modules-core/android/cmake/main.cmake'),
+);
+if (expoCmake) {
+  const s = fs.readFileSync(expoCmake, 'utf8');
+  const NEEDLE = '  "${COMMON_DIR}/fabric"\n)';
+  if (s.includes(NEEDLE)) {
+    const count = s.split(NEEDLE).length - 1;
+    if (count === 1) {
+      save(
+        expoCmake,
+        s.replace(
+          NEEDLE,
+          '  "${COMMON_DIR}/fabric"\n' +
+            '  # RN 0.87: cxxreact/ErrorUtils.h 已成转发头,需 jserrorhandler/\n' +
+            '  # 该目录只在 ReactCommon 下;expo 仅在存在 worklets 时才加,此处无条件补上\n' +
+            '  "${REACT_NATIVE_DIR}/ReactCommon"\n)',
+        ),
+      );
+    } else {
+      console.warn(`main.cmake 中目标片段出现 ${count} 次,跳过以免误改`);
+    }
+  }
+}
+
+// ---- 8) 放行"Provider 形式的 sourceSets"(AGP 9 默认禁止) ----
 // expo-autolinking 仍这么写:
 //   ext.sourceSets.getByName("main").java
 //      .srcDirs(getPackageListDir(project), getInlineModulesDir(project))
@@ -232,7 +267,7 @@ if (fs.existsSync(gradleProps)) {
   }
 }
 
-// ---- 7) 自检:确保补丁真的生效,且没有把源码改成语法非法的样子 ----
+// ---- 9) 自检:确保补丁真的生效,且没有把源码改成语法非法的样子 ----
 const problems = [];
 
 const pubFile = expoPluginKt.find((f) => path.basename(f) === 'MavenPublicationExtension.kt');
@@ -291,6 +326,18 @@ if (!fs.existsSync(gradleProps)) {
   )
 ) {
   problems.push('gradle.properties 未设置 android.sourceset.disallowProvider=false');
+}
+
+// expo-modules-core 必须能解析 <jserrorhandler/ErrorUtils.h>
+if (!expoCmake) {
+  problems.push('未找到 expo-modules-core/android/cmake/main.cmake');
+} else if (
+  !fs.readFileSync(expoCmake, 'utf8').includes('"${REACT_NATIVE_DIR}/ReactCommon"')
+) {
+  problems.push(
+    'expo-modules-core 的 cmake 未加 ${REACT_NATIVE_DIR}/ReactCommon,' +
+      "会报 fatal error: 'jserrorhandler/ErrorUtils.h' file not found",
+  );
 }
 
 if (problems.length > 0) {
