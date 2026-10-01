@@ -122,13 +122,10 @@ jobs:
           pub_file.write_text(ps.replace(old_body, new_body))
           pub2 = next(ws.glob("**/expo-module-gradle-plugin/src/**/MavenPublicationExtension.kt"))
           ms = pub2.read_text()
-          old_ver = (
-            'version = requireNotNull(project.androidLibraryExtension().defaultConfig.versionName) {\n'
-            "      'android.defaultConfig.versionName' is not defined\n"
-            '    },'
+          ms = ms.replace(
+            "project.androidLibraryExtension().defaultConfig.versionName",
+            '\"\" /* AGP 9: LibraryDefaultConfig 无 versionName,仅 maven 发布路径 */"'
           )
-          if old_ver in ms:
-              ms = ms.replace(old_ver, 'version = "", // AGP 9: LibraryDefaultConfig 无 versionName(仅 maven 发布路径)')
           pub2.write_text(ms)
           print("publishing patched")
           PY
