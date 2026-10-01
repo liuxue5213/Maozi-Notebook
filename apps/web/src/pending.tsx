@@ -148,10 +148,24 @@ function autoCategory(merchantNote: string, cats: CategoryRow[]): string | null 
 
 async function confirmAll(rows: PendingTransactionRow[], cats: CategoryRow[], accounts: Array<{ id: string }>): Promise<void> {
   if (!window.confirm(`确认全部 ${rows.length} 条并计入统计?`)) return;
+  await confirmAllSilent(rows, cats, accounts);
+}
+
+/** 全部入账(P0 用户诉求,第 33 轮):池内条目一键确认,无弹窗;单条失败不阻断整批;返回成功条数 */
+export async function confirmAllSilent(rows: PendingTransactionRow[], cats: CategoryRow[], accounts: Array<{ id: string }>): Promise<number> {
+  let ok = 0;
   for (const p of rows) {
-    const parsed = (p.parsed ?? {}) as { merchant?: string; note?: string };
-    await confirmOne(p, autoCategory(`${parsed.merchant ?? ''}${parsed.note ?? ''}`, cats), accounts[0]?.id ?? '');
+    const live = await db.pending_transactions.get(p.id);
+    if (!live) continue; // 已被并行确认/删除
+    try {
+      const parsed = (p.parsed ?? {}) as { merchant?: string; note?: string };
+      await confirmOne(p, autoCategory(`${parsed.merchant ?? ''}${parsed.note ?? ''}`, cats), accounts[0]?.id ?? '');
+      ok++;
+    } catch {
+      // 单条失败不阻断整批
+    }
   }
+  return ok;
 }
 
 function PendingRow({ pending, cats, accounts }: {
@@ -253,8 +267,8 @@ function ImportWizard({ onClose, txs }: { onClose: () => void; txs: TransactionR
     });
   };
 
-  const writePending = async (): Promise<void> => {
-    if (!mapping) return;
+  const writePending = async (opts: { silent?: boolean } = {}): Promise<PendingTransactionRow[]> => {
+    if (!mapping) return [];
     const r = parseCsv(text, mapping);
     const ledgerId = await getActiveLedgerId();
     const now = Date.now();
@@ -264,7 +278,7 @@ function ImportWizard({ onClose, txs }: { onClose: () => void; txs: TransactionR
         .filter((p) => p.ledger_id === ledgerId && p.dedupe_hash)
         .map((p) => p.dedupe_hash),
     );
-    let written = 0;
+    const fresh: PendingTransactionRow[] = [];
     for (const row of r.rows) {
       const parsed = { amount: row.amount, isExpense: row.isExpense, happenedAt: row.happenedAt, merchant: row.merchant, note: row.note };
       const hash = await dedupeHash({
@@ -293,9 +307,22 @@ function ImportWizard({ onClose, txs }: { onClose: () => void; txs: TransactionR
       };
       await db.pending_transactions.put(p);
       enqueue('pending_transaction', p as unknown as Record<string, unknown>);
-      written++;
+      fresh.push(p);
     }
-    window.alert(`已写入 ${written} 条到待确认池${r.rows.length - written > 0 ? `,去重跳过 ${r.rows.length - written} 条` : ''}`);
+    if (!opts.silent) {
+      window.alert(`已写入 ${fresh.length} 条到待确认池${r.rows.length - fresh.length > 0 ? `,去重跳过 ${r.rows.length - fresh.length} 条` : ''}`);
+      onClose();
+    }
+    return fresh;
+  };
+
+  /** 全部入账(P0 用户诉求,第 33 轮):导入 → 写入待确认池 → 立即全部确认,一步到位 */
+  const writeAndConfirmAll = async (): Promise<void> => {
+    const fresh = await writePending({ silent: true });
+    const cats = await db.categories.toArray();
+    const accounts = (await db.accounts.toArray()).filter((a) => !a.is_archived);
+    const ok = await confirmAllSilent(fresh, cats, accounts);
+    window.alert(`已全部入账 ${ok} 条(去重跳过 ${fresh.length - ok} 条)`);
     onClose();
   };
 
@@ -350,7 +377,10 @@ function ImportWizard({ onClose, txs }: { onClose: () => void; txs: TransactionR
                 <div className="muted small">预检中…</div>
               );
             })()}
-            <button className="primary" onClick={() => void writePending()}>写入待确认池</button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="primary" onClick={() => void writePending()}>写入待确认池</button>
+              <button className="primary" onClick={() => void writeAndConfirmAll()}>全部入账</button>
+            </div>
             <button className="link" onClick={() => setStep('mapping')}>‹ 返回调整映射</button>
           </>
         )}
@@ -438,10 +468,10 @@ function TextImportModal({ onClose }: { onClose: () => void }) {
     });
   };
 
-  const writePending = async (): Promise<void> => {
-    if (!preview) return;
+  const writePending = async (opts: { silent?: boolean } = {}): Promise<PendingTransactionRow[]> => {
+    if (!preview) return [];
     const r = parseTextLedger(text);
-    if (!r.ok) return;
+    if (!r.ok) return [];
     const ledgerId = await getActiveLedgerId();
     const now = Date.now();
     const existingHashes = new Set(
@@ -450,6 +480,7 @@ function TextImportModal({ onClose }: { onClose: () => void }) {
         .map((p) => p.dedupe_hash),
     );
     const daysInMonth = new Date(preview.year, preview.month, 0).getDate();
+    const fresh: PendingTransactionRow[] = [];
     let written = 0;
     let skipped = 0;
     let perDaySeq = 0;
@@ -494,9 +525,21 @@ function TextImportModal({ onClose }: { onClose: () => void }) {
       };
       await db.pending_transactions.put(p);
       enqueue('pending_transaction', p as unknown as Record<string, unknown>);
+      fresh.push(p);
       written++;
     }
     setDone(`已写入 ${written} 条到待确认池${skipped > 0 ? `,跳过 ${skipped} 条(重复或无效)` : ''}`);
+    return fresh;
+  };
+
+  /** 全部入账(第 33 轮):解析 → 写入待确认池 → 立即全部确认 */
+  const writeAndConfirmAll = async (): Promise<void> => {
+    const fresh2 = await writePending({ silent: true });
+    const cats = await db.categories.toArray();
+    const accounts = (await db.accounts.toArray()).filter((a) => !a.is_archived);
+    const ok = await confirmAllSilent(fresh2, cats, accounts);
+    setDone(`已全部入账 ${ok} 条`);
+    onClose();
   };
 
   return (
@@ -526,7 +569,10 @@ function TextImportModal({ onClose }: { onClose: () => void }) {
           <button className="primary" disabled={!text.trim()} onClick={parse}>解析预览</button>
         )}
         {preview && (
-          <button className="primary" onClick={() => void writePending()}>写入待确认池</button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="primary" onClick={() => void writePending()}>写入待确认池</button>
+            <button className="primary" onClick={() => void writeAndConfirmAll()}>全部入账</button>
+          </div>
         )}
         {done && <p className="muted small">{done}</p>}
         <button className="link" onClick={onClose}>关闭</button>
