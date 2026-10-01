@@ -116,7 +116,7 @@ async function wipeLocal(): Promise<void> {
     db.ledgers.clear(), db.members.clear(), db.accounts.clear(), db.categories.clear(),
     db.tags.clear(), db.transactions.clear(), db.budgets.clear(), db.budget_items.clear(),
     db.recurring_rules.clear(), db.attachments.clear(), db.pending_transactions.clear(),
-    db.debts.clear(), db.reimbursements.clear(), db.outbox.clear(), db.meta.clear(),
+    db.debts.clear(), db.reimbursements.clear(), db.outbox.clear(), db.deadletter.clear(), db.meta.clear(),
   ]);
   await db.meta.put({ key: 'sync_cursor', value: 0 });
   if (seeded) await db.meta.put({ key: 'local_seeded', value: seeded });

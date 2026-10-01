@@ -21,7 +21,17 @@ export function getServerBase(): string {
   return stored;
 }
 export function setServerBase(v: string): void {
-  localStorage.setItem(SERVER_KEY, v.trim().replace(/\/+$/, ''));
+  // P1-10(Review):仅允许 http(s) 绝对地址 —— 修复前可填任意串(如 javascript:/相对路径)
+  // 并把 Bearer token 发往不可控目标;协议白名单是最小防线(完整域名白名单需产品级配置)
+  let url = v.trim().replace(/\/+$/, '');
+  if (url && !/^https?:\/\//i.test(url)) url = `http://${url}`;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('bad protocol');
+    localStorage.setItem(SERVER_KEY, parsed.origin);
+  } catch {
+    return; // 非法输入静默丢弃,保留原值
+  }
 }
 export const getAccessToken = (): string | null => localStorage.getItem(ACCESS_KEY);
 export const isLoggedIn = (): boolean => !!getAccessToken();

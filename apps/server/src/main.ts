@@ -67,6 +67,14 @@ async function main(): Promise<void> {
   };
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
+  // P1-35(Review 2D):进程级兜底 —— 未捕获异常/拒绝留痕但不崩(灰度期不能盲飞);
+  // 审计/异步清理等 fire-and-forget 路径的失败都会落到这里被看见
+  process.on('unhandledRejection', (reason) => {
+    console.error('[ledgerone] unhandledRejection:', reason);
+  });
+  process.on('uncaughtException', (err) => {
+    console.error('[ledgerone] uncaughtException:', err);
+  });
 }
 
 void main();

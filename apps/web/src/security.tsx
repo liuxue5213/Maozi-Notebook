@@ -4,6 +4,7 @@ import {
   enableFieldEncryption, disableFieldEncryption, unlockFieldEncryption, lockFieldEncryption,
   fieldEncryptionConfigured,
 } from './crypto/keyring';
+import { DeadLetterSection } from './deadletter';
 
 const LOCK_KEY = 'lo_lock';
 const STAT_KEY = 'lo_stat_optin';
@@ -278,6 +279,8 @@ export function SecurityPanel({ onBack }: { onBack: () => void }) {
           <span className="muted small">开启应用锁后自动启用(密钥由 PIN 派生,只存内存);关闭应用锁会先全量解密落盘</span>
         </div>
       </div>
+
+      <DeadLetterSection />
 
       <div className="me-section">
         <div className="me-row static-row">

@@ -10,14 +10,29 @@ const PURGE_TABLES = [
 export async function purgeRecycleBin(now = Date.now()): Promise<number> {
   const cutoff = now - 30 * 24 * 60 * 60 * 1000;
   let purged = 0;
-  for (const table of PURGE_TABLES) {
-    const res = await db.execute(
-      sql.raw(`DELETE FROM ${table} WHERE is_deleted = true AND deleted_at IS NOT NULL AND deleted_at < ${cutoff}`),
+  // P1-34(Review):单事务 —— 中途失败整体回滚,不留半删状态;30 天窗口内同一批表级联删净
+  await db.transaction(async (tx: any) => {
+    for (const table of PURGE_TABLES) {
+      const res = await tx.execute(
+        sql.raw(`DELETE FROM ${table} WHERE is_deleted = true AND deleted_at IS NOT NULL AND deleted_at < ${cutoff}`),
+      );
+      purged += countOf(res);
+    }
+    // 待确认池里「忽略/已确认」超过 30 天的也一并清理
+    const pend = await tx.execute(
+      sql.raw(`DELETE FROM pending_transactions WHERE status <> 'pending' AND updated_at < ${cutoff}`),
     );
-    purged += countOf(res);
-  }
-  // 待确认池里「忽略/已确认」超过 30 天的也一并清理
-  await db.execute(sql.raw(`DELETE FROM pending_transactions WHERE status <> 'pending' AND updated_at < ${cutoff}`));
+    purged += countOf(pend);
+    // P1-34 补齐:refresh_tokens(过期 + 吊销超 30 天)与 phone_codes(过期超 30 天)此前无清理,单调增长
+    const rt = await tx.execute(
+      sql.raw(`DELETE FROM refresh_tokens WHERE expires_at < ${cutoff} OR revoked_at IS NOT NULL AND revoked_at < ${cutoff}`),
+    );
+    purged += countOf(rt);
+    const pc = await tx.execute(
+      sql.raw(`DELETE FROM phone_codes WHERE expires_at < ${cutoff}`),
+    );
+    purged += countOf(pc);
+  });
   return purged;
 }
 

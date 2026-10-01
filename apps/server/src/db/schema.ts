@@ -1,4 +1,5 @@
 import { pgTable, text, integer, bigint, boolean, numeric, jsonb, index, uniqueIndex } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 
 /**
  * 字段命名与客户端/PRD 5.2 保持 snake_case 一致,同步层无需再做键名映射。
@@ -51,7 +52,7 @@ export const ledger_members = pgTable(
     joined_at: timeMs('joined_at').notNull(),
     ...syncCols,
   },
-  (t) => [uniqueIndex('member_ledger_user_uq').on(t.ledger_id, t.user_id), index('member_user_idx').on(t.user_id, t.is_deleted)],
+  (t) => [uniqueIndex('member_ledger_user_uq').on(t.ledger_id, t.user_id).where(sql`is_deleted = false`), index('member_user_idx').on(t.user_id, t.is_deleted)],
 );
 
 export const accounts = pgTable(
@@ -175,7 +176,7 @@ export const budget_items = pgTable(
     used_cached: numeric('used_cached', { precision: 18, scale: 4 }),
     ...syncCols,
   },
-  (t) => [uniqueIndex('budget_item_uq').on(t.budget_id, t.category_id)],
+  (t) => [uniqueIndex('budget_item_uq').on(t.budget_id, t.category_id).where(sql`is_deleted = false`)],
 );
 
 export const recurring_rules = pgTable(
@@ -227,7 +228,7 @@ export const pending_transactions = pgTable(
     ...syncCols,
   },
   (t) => [
-    uniqueIndex('pending_dedupe_uq').on(t.ledger_id, t.dedupe_hash),
+    uniqueIndex('pending_dedupe_uq').on(t.ledger_id, t.dedupe_hash).where(sql`is_deleted = false`),
     index('pending_ledger_idx').on(t.ledger_id), index('pending_lv_idx').on(t.ledger_id, t.server_version),
   ],
 );
