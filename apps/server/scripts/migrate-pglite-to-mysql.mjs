@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { PGlite } from '@electric-sql/pglite';
 import mysql from 'mysql2/promise';
 import { existsSync } from 'node:fs';
