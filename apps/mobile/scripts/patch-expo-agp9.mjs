@@ -25,6 +25,8 @@
  *      而 9 个未显式关闭发布的模块会去读它 → SoftwareComponent not found)
  *   6. 为"声明了 buildConfigField 却未开启 buildConfig"的模块补开关
  *      (AGP 9 下 library 的 buildConfig 默认关闭;@expo/log-box 漏开)
+ *   7. 在生成工程的 gradle.properties 里设 android.sourceset.disallowProvider=false
+ *      (expo-autolinking 仍向 sourceSets 传 Provider,AGP 9 默认禁止)
  *
  * 幂等:重复运行无副作用(第二次运行 patched 数为 0)。
  * 用法: node scripts/patch-expo-agp9.mjs [仓库根路径]
@@ -202,6 +204,34 @@ for (const f of androidBuildGradle) enableBuildConfig(f);
 const appModuleGradle = path.join(root, 'apps/mobile/android/app/build.gradle');
 if (fs.existsSync(appModuleGradle)) enableBuildConfig(appModuleGradle);
 
+// ---- 7) 放行"Provider 形式的 sourceSets"(AGP 9 默认禁止) ----
+// expo-autolinking 仍这么写:
+//   ext.sourceSets.getByName("main").java
+//      .srcDirs(getPackageListDir(project), getInlineModulesDir(project))
+// 两个参数都是 Provider<Directory>(expo-autolinking-plugin/ExpoAutolinkingPlugin.kt:95),
+// AGP 9 直接抛 "You cannot add Provider instances to the Android SourceSet API"。
+// AGP 在报错正文里给出的官方开关就是下面这一项。
+// 之所以敢关:同一个插件在上游已经显式声明了任务依赖
+//   project.tasks.named("preBuild", Task::class.java).dependsOn(generatePackagesList)
+// 因此不依赖 Provider 携带的隐式依赖,不会丢失"先生成再编译"的顺序保证。
+const gradleProps = path.join(root, 'apps/mobile/android/gradle.properties');
+if (fs.existsSync(gradleProps)) {
+  const s = fs.readFileSync(gradleProps, 'utf8');
+  if (!/^[ \t]*android\.sourceset\.disallowProvider\s*=/m.test(s)) {
+    const note = [
+      '',
+      '# AGP 9:expo-autolinking 仍把 Provider 传给 Android SourceSet API',
+      '# (expo-autolinking-plugin ExpoAutolinkingPlugin.kt:95),AGP 9 默认禁止并直接报错。',
+      '# 此处启用 AGP 给出的官方开关放行;expo 已用',
+      '# preBuild.dependsOn(generatePackagesList) 显式声明任务依赖,',
+      '# 故不会丢失生成顺序保证。',
+      'android.sourceset.disallowProvider=false',
+      '',
+    ].join('\n');
+    save(gradleProps, s + (s.endsWith('\n') ? '' : '\n') + note);
+  }
+}
+
 // ---- 7) 自检:确保补丁真的生效,且没有把源码改成语法非法的样子 ----
 const problems = [];
 
@@ -250,6 +280,17 @@ for (const f of moduleGradles) {
   if (/buildConfigField/.test(s) && !RE_BUILD_CONFIG_ON.test(s)) {
     problems.push(`模块声明了 buildConfigField 但未开启 buildConfig:${path.relative(root, f)}`);
   }
+}
+
+// 必须放行 Provider 形式的 sourceSets,否则 expo-autolinking 直接报错
+if (!fs.existsSync(gradleProps)) {
+  problems.push('未找到 apps/mobile/android/gradle.properties');
+} else if (
+  !/^[ \t]*android\.sourceset\.disallowProvider\s*=\s*false\s*$/m.test(
+    fs.readFileSync(gradleProps, 'utf8'),
+  )
+) {
+  problems.push('gradle.properties 未设置 android.sourceset.disallowProvider=false');
 }
 
 if (problems.length > 0) {
