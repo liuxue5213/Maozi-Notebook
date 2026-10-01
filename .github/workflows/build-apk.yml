@@ -81,6 +81,39 @@ jobs:
           path: apps/mobile/android/gradle-build.log
           if-no-files-found: ignore
 
+      # 失败时把关键错误行以 check annotation 形式抛出。
+      # 动机:job 日志与 artifact 下载都需要 token(GET .../logs 返回
+      # "Must have admin rights"),而 annotation 可通过公开的
+      # GET /repos/{owner}/{repo}/check-runs/{id}/annotations 匿名读取,
+      # 便于在无凭据环境下定位问题,不必反复手工粘贴日志。
+      # 注意:GitHub 单步最多 10 条 error 级 annotation,故先筛最有信息量的行。
+      - name: Surface gradle error as annotations
+        if: failure()
+        working-directory: apps/mobile/android
+        shell: bash
+        run: |
+          LOG=gradle-build.log
+          if [ ! -f "$LOG" ]; then
+            echo "::error::gradle-build.log 未生成"
+            exit 0
+          fi
+          {
+            grep -m1 -E '^> Task .*FAILED' "$LOG" || true
+            awk '/\* What went wrong/{f=1} f{ if (/^\* Try:/) exit; print }' "$LOG"
+            grep -m2 -E '^(e: |A problem occurred )' "$LOG" || true
+          } 2>/dev/null | sed '/^[[:space:]]*$/d' > err-excerpt.txt || true
+          if [ ! -s err-excerpt.txt ]; then
+            tail -n 6 "$LOG" | sed '/^[[:space:]]*$/d' > err-excerpt.txt
+          fi
+          n=0
+          while IFS= read -r line; do
+            n=$((n + 1))
+            [ "$n" -gt 10 ] && break
+            safe=$(printf '%s' "$line" | sed 's/%/%25/g; s/\r//g')
+            echo "::error::$safe"
+          done < err-excerpt.txt
+          exit 0
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
