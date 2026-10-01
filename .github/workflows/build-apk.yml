@@ -35,24 +35,13 @@ jobs:
         working-directory: apps/mobile
         run: pnpm exec expo prebuild -p android --no-install
 
-      # RN 0.87 的 gradle 插件把 AGP 9.2.1 作为 implementation 依赖强制带入,
-      # AGP 因此必须走 9.2.1 + Gradle 9.4.1 + Kotlin 2.3.0(Gradle 9.4.1 自带);
-      # 而 expo 57.0 模板是 AGP 8 惯用法,需要对齐:Kotlin 统一 2.3.0、
-      # 移除旧式 kotlin-android 应用(Kotlin 由 AGP 9 内置)、proguard 换 optimize、
-      # expo-module-gradle-plugin 编译依赖升 9.2.1 并迁移移除 API。
-      # 具体修补逻辑见 apps/mobile/scripts/patch-expo-agp9.mjs(幂等,自带自检,本地与 CI 共用同一份)
-      - name: Align generated android project to AGP 9
-        working-directory: apps/mobile
-        run: |
-          cd android
-          sed -i 's#gradle-[0-9.]*-bin.zip#gradle-9.4.1-bin.zip#' gradle/wrapper/gradle-wrapper.properties
-          sed -i "s/classpath('com.android.tools.build:gradle')/classpath('com.android.tools.build:gradle:9.2.1')/" build.gradle
-          # AGP 9 内置 Kotlin,app 模板里这句会重复注册 'kotlin' 扩展
-          sed -i '/apply plugin: "org.jetbrains.kotlin.android"/d' app/build.gradle
-          # AGP 9 移除了 proguard-android.txt(含 -dontoptimize)
-          sed -i "s/proguard-android\.txt/proguard-android-optimize.txt/g" app/build.gradle
-          # 补丁脚本用绝对路径调用:此处 cwd 已切到 android/,相对路径会解析成 apps/scripts/ 而找不到文件
-          node "$GITHUB_WORKSPACE/apps/mobile/scripts/patch-expo-agp9.mjs" "$GITHUB_WORKSPACE"
+      # 曾经这里有一整条 "Align generated android project to AGP 9" 补丁步骤
+      # (4 条 sed + apps/mobile/scripts/patch-expo-agp9.mjs 的 8 项补丁),
+      # 用于把 expo 57.0 的 AGP 8 模板强行对齐到 RN 0.87 强制的 AGP 9.2.1。
+      # 现已把 react-native 从 0.87.1 降回 Expo SDK 57 官方对齐的 0.86.3
+      # (见 expo/bundledNativeModules.json),RN 0.86.3 的 gradle 插件版本目录是
+      # agp = 8.12.0 / kotlin = 2.1.20 —— 与 expo 模板天然一致,补丁全部不再需要。
+      # 若日后重新升级 RN,请先确认 Expo 已支持对应的 AGP 大版本再动。
 
       - name: Cache gradle
         uses: actions/cache@v4
