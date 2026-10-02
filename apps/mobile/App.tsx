@@ -7,7 +7,7 @@ import { useSyncExternalStore } from 'react';
 import { engine, scheduleSync, snapshot, startMobileAutoSync } from './src/lib/sync';
 import { initDb, listRecent, saveTx, topCategories, getActiveLedgerId, metaGet, metaSet, db } from './src/lib/store';
 import { resetLocalDatabase } from './src/lib/db';
-import { prepareAfterLogin } from '@ledgerone/sqlite-sync';
+import { prepareAfterLogin, saveLocal } from '@ledgerone/sqlite-sync';
 import { authApi, clearSession, getServerUrl, isLoggedIn, logout as logoutAll, saveSession, setServerUrl, SERVER_PRESETS, resolveServerUrl } from './src/lib/api';
 
 type Tab = 'record' | 'list' | 'me';
@@ -125,10 +125,43 @@ function RecordScreen({ onSaved }: { onSaved: () => void }) {
   const [cats, setCats] = useState<Cat[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [newCat, setNewCat] = useState('');
+
+  const refreshCats = async () => {
+    setCats((await topCategories(type === 'income' ? 'income' : 'expense')) as unknown as Cat[]);
+  };
 
   useEffect(() => {
-    void initDb().then(async () => setCats((await topCategories(type === 'income' ? 'income' : 'expense')) as unknown as Cat[]));
-  }, [type]);
+    void initDb().then(async () => {
+      setAdding(false);
+      setNewCat('');
+      await refreshCats();
+    });
+  }, [type]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** 快速新增分类:输入名字即存(本地即时生效,联网经 outbox 自动同步),并自动选中 */
+  const addCategory = async () => {
+    const name = newCat.trim().slice(0, 20);
+    if (!name) { setAdding(false); return; }
+    await initDb();
+    const ledgerId = await getActiveLedgerId();
+    if (!ledgerId) return;
+    const dup = cats.find((c) => c.name === name);
+    if (dup) { setSelected(dup.id); setNewCat(''); setAdding(false); return; }
+    const now = Date.now();
+    const row = {
+      id: newId(), ledger_id: ledgerId, parent_id: null, name, kind: type === 'income' ? 'income' : 'expense',
+      icon: '🏷️', color: null, sort: now, is_hidden: false, is_preset: false,
+      client_version: 1, server_version: null, is_deleted: false, deleted_at: null, created_at: now, updated_at: now,
+    };
+    await saveLocal(db, 'category', row as never);
+    await refreshCats();
+    setSelected(row.id);
+    setNewCat('');
+    setAdding(false);
+    scheduleSync();
+  };
 
   const save = async () => {
     const v = Number(amount);
@@ -177,6 +210,27 @@ function RecordScreen({ onSaved }: { onSaved: () => void }) {
             <Text style={styles.catName}>{c.name}</Text>
           </Pressable>
         ))}
+        {!adding ? (
+          <Pressable style={styles.catBtn} onPress={() => setAdding(true)}>
+            <Text style={styles.catIcon}>＋</Text>
+            <Text style={styles.catName}>新增</Text>
+          </Pressable>
+        ) : (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginVertical: 6 }}>
+            <TextInput
+              style={{ ...styles.input, flex: 1, minHeight: 40 }}
+              value={newCat}
+              autoFocus
+              onChangeText={(t) => setNewCat(t.slice(0, 20))}
+              placeholder="新分类名(如 宠物医疗)"
+              placeholderTextColor="#b4bac6"
+              onSubmitEditing={() => void addCategory()}
+            />
+            <Pressable style={{ ...styles.saveBtn, paddingHorizontal: 14, paddingVertical: 8 }} onPress={() => void addCategory()}>
+              <Text style={styles.saveText}>保存</Text>
+            </Pressable>
+          </View>
+        )}
       </View>
       <Pressable style={[styles.saveBtn, (!amount || !selected) && styles.disabled]} onPress={() => void save()}>
         <Text style={styles.saveText}>保存{amount && selected ? ` ¥${formatAmount(amount)}` : ''}</Text>
