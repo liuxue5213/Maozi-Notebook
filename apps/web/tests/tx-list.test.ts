@@ -4,6 +4,8 @@
  * 600 行 + 跨账本行验证:作用域、分页、hasMore、关键词限外命中、日期边界。
  */
 import 'fake-indexeddb/auto';
+// CI 冷机上 fake-indexeddb 写 600 行偶发超 vitest 默认 5s(本地稳定 <2s),仅放宽本文件
+const T = 30_000;
 import { afterEach, describe, expect, it } from 'vitest';
 import type { TransactionRow } from '@ledgerone/domain';
 
@@ -40,7 +42,7 @@ describe('P0-3/P0-4:明细窗口加载(双下推 + 增量分页)', () => {
   afterEach(async () => {
     await new Promise((r) => setTimeout(r, 25));
   });
-  it('无筛选 limit 500:rows 500、matchedTotal 600、hasMore;不含他账本行', async () => {
+  it('无筛选 limit 500:rows 500、matchedTotal 600、hasMore;不含他账本行', { timeout: T }, async () => {
     await seed();
     const { db } = await import('../src/db/db');
     const { loadTxWindow, TX_PAGE_SIZE } = await import('../src/utils/tx-list');
