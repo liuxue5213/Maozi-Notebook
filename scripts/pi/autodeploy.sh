@@ -25,8 +25,15 @@ log "发现新版本 $REMOTE_VER(本地 $LOCAL_VER),开始部署"
 # 2) 下载解压
 rm -rf "$WORK"; mkdir -p "$WORK"
 TARBALL=$(curl -fsSL --max-time 30 "$API" | json_asset_url server-deploy.tar.gz)
-curl -fsSL --max-time 300 -o "$WORK/pkg.tar.gz" "$TARBALL" || { log "下载失败"; exit 1; }
-tar xzf "$WORK/pkg.tar.gz" -C "$WORK" || { log "解压失败"; exit 1; }
+# 国内直连 GitHub release-assets(Azure CDN)易断流:重试+断点续传
+ok=0
+for i in $(seq 1 8); do
+  curl -fSL --retry 3 --retry-all-errors -C - --max-time 600 -o "$WORK/pkg.tar.gz" "$TARBALL" && ok=1 && break
+  log "下载重试 $i"; sleep 5
+done
+[ "$ok" = 1 ] || { log "下载失败"; exit 1; }
+gzip -t "$WORK/pkg.tar.gz" 2>/dev/null || { log "gzip 校验失败"; rm -f "$WORK/pkg.tar.gz"; exit 1; }
+tar xzf "$WORK/pkg.tar.gz" -C "$WORK" || { log "解压失败"; rm -rf "$WORK"; exit 1; }
 [ -d "$WORK/pi-deploy/dist" ] || { log "包结构异常(缺 dist)"; exit 1; }
 
 # 3) 保留配置,原子切换
