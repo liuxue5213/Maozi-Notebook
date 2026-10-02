@@ -52,6 +52,13 @@ jobs:
           key: gradle-${{ hashFiles('apps/mobile/android/gradle/wrapper/gradle-wrapper.properties', 'apps/mobile/android/build.gradle', 'apps/mobile/android/app/build.gradle') }}
           restore-keys: gradle-
 
+      # debug 包:bundleInDebug 内嵌 JS bundle(可独立运行),保留红屏报错与全部日志,便于真机排查
+      - name: Gradle assembleDebug (embedded bundle)
+        working-directory: apps/mobile/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon -PbundleInDebug=true
+
       # release 变体才会打进完整 JS bundle(离线可跑,不依赖 metro);
       # 未配置正式签名时 gradle 自动用 debug keystore 签名,可直接安装
       - name: Gradle assembleRelease
@@ -118,6 +125,14 @@ jobs:
             echo "::warning::$(printf '%s' "$line" | sed 's/%/%25/g; s/\r//g')"
           done < warn.txt
           exit 0
+
+      - name: Upload APK (debug, 带红屏诊断)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MaoziNotebook-APK-debug
+          path: apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: ignore
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
