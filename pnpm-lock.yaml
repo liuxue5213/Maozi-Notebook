@@ -23,6 +23,9 @@ importers:
       '@ledgerone/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@ledgerone/ledger-core':
+        specifier: workspace:*
+        version: link:../../packages/ledger-core
       '@ledgerone/sqlite-sync':
         specifier: workspace:*
         version: link:../../packages/sqlite-sync

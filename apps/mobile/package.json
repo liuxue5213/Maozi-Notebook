@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@ledgerone/domain": "workspace:*",
+    "@ledgerone/ledger-core": "workspace:*",
     "@ledgerone/sqlite-sync": "workspace:*",
     "@ledgerone/sync": "workspace:*",
     "@ledgerone/sync-client": "workspace:*",
