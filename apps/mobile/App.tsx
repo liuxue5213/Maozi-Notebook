@@ -1,3 +1,4 @@
+import './src/lib/polyfills'; // 必须最先:uuid@14 裸用全局 crypto,Hermes 没有,必须先垫上
 import React, { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { formatAmount, newId, type TransactionRow, type TransactionType } from '@ledgerone/domain';

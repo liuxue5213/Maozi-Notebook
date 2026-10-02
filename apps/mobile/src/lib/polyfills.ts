@@ -20,6 +20,7 @@ type CryptoLike = {
 
 const g = globalThis as typeof globalThis & { crypto?: CryptoLike; TextEncoder?: unknown; TextDecoder?: unknown };
 
+console.log('[polyfills] crypto shim installed');
 if (!g.crypto) g.crypto = {};
 if (!g.crypto.getRandomValues) {
   g.crypto.getRandomValues = (array: ArrayBufferView) =>
