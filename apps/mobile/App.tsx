@@ -269,9 +269,21 @@ function MeScreen({ logged, onLogged, syncText }: { logged: boolean; onLogged: (
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const [me, setMe] = useState<{ email?: string | null; nickname?: string | null } | null>(null);
+
   useEffect(() => {
-    void initDb().then(async () => setServer(await getServerUrl()));
-  }, []);
+    void initDb().then(async () => {
+      setServer(await getServerUrl());
+      if (logged) {
+        try {
+          const u = (await authApi.me()) as { email?: string; nickname?: string };
+          setMe({ email: u.email, nickname: u.nickname });
+        } catch { /* token 失效等场景静默,下轮刷新 */ }
+      } else {
+        setMe(null);
+      }
+    });
+  }, [logged]);
 
   const submit = async () => {
     if (!email || !password) return;
@@ -291,9 +303,22 @@ function MeScreen({ logged, onLogged, syncText }: { logged: boolean; onLogged: (
       // P0-1(第 27 轮):三态换号处理(明确换号清库/纯本地保留/残留清库),与 Web 同策略
       const action = await prepareAfterLogin(db, String((data as { user?: { id?: string } }).user?.id ?? ''));
       onLogged(true);
-      setMsg(action === 'wiped' ? '检测到账号切换,已清空本地数据并重新同步' : '登录成功,同步已开启');
       await initDb(); // 清库后重播种/重初始化
-      void engine.syncOnce();
+      await engine.syncOnce();
+      // 首登收敛:若当前 active 账本是本地新建(从未上云),而服务器已有同步过的账本,
+      // 则采纳服务器的账本作为当前账本——否则两端同账号却各看各的空账本
+      const active = await getActiveLedgerId();
+      const activeSynced = await db.getAllAsync<{ n: number }>(
+        'SELECT COUNT(*) AS n FROM ledgers WHERE id = ? AND server_version IS NOT NULL', [active]);
+      if (!Number(activeSynced[0]?.n)) {
+        const srvLedger = await db.getAllAsync<{ id: string }>(
+          'SELECT id FROM ledgers WHERE server_version IS NOT NULL AND is_deleted = 0 ORDER BY created_at LIMIT 1');
+        if (srvLedger[0]?.id && srvLedger[0].id !== active) {
+          await metaSet(db, 'active_ledger', srvLedger[0].id);
+          console.log('[auth] 采纳服务器账本:', srvLedger[0].id);
+        }
+      }
+      setMsg(action === 'wiped' ? '检测到账号切换,已清空本地数据并重新同步' : '登录成功,同步已开启');
     } catch (e) {
       console.log('[auth] 登录/注册失败:', String(e));
       setMsg('连接服务器失败(公网与局域网均不可达)——已保持离线模式,本地记账不受影响;网络恢复后请重试登录');
@@ -310,7 +335,7 @@ function MeScreen({ logged, onLogged, syncText }: { logged: boolean; onLogged: (
 
   return (
     <ScrollView contentContainerStyle={styles.form}>
-      <Text style={styles.meTitle}>{logged ? '已登录 · 云同步开启' : '未登录 · 纯本地模式'}</Text>
+      <Text style={styles.meTitle}>{logged ? `${me?.nickname || me?.email || '已登录'} · 云同步开启` : '未登录 · 纯本地模式'}</Text>
       <Text style={styles.muted}>离线也能记账:数据先存本机,连上服务器后自动同步</Text>
       <Text style={styles.muted}>同步状态:{syncText}</Text>
       {!logged && (
