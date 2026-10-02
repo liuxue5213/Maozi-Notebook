@@ -6,7 +6,7 @@ import { engine, scheduleSync, snapshot, startMobileAutoSync } from './src/lib/s
 import { initDb, listRecent, saveTx, topCategories, getActiveLedgerId, metaGet, metaSet, db } from './src/lib/store';
 import { resetLocalDatabase } from './src/lib/db';
 import { prepareAfterLogin } from '@ledgerone/sqlite-sync';
-import { authApi, clearSession, getServerUrl, isLoggedIn, logout as logoutAll, saveSession, setServerUrl, SERVER_PRESETS } from './src/lib/api';
+import { authApi, clearSession, getServerUrl, isLoggedIn, logout as logoutAll, saveSession, setServerUrl, SERVER_PRESETS, resolveServerUrl } from './src/lib/api';
 
 type Tab = 'record' | 'list' | 'me';
 
@@ -221,8 +221,15 @@ function MeScreen({ logged, onLogged, syncText }: { logged: boolean; onLogged: (
     setBusy(true);
     setMsg(null);
     try {
-      await setServerUrl(server);
-      let data = await authApi.login(email, password).catch(() => authApi.register(email, password));
+      // 故障转移链:公网 frp → 局域网 → 全断时报错并保持离线(本地记账不受影响)
+      const reachable = await resolveServerUrl();
+      setServer(reachable);
+      await setServerUrl(reachable);
+      let data = await authApi.login(email, password).catch((e) => {
+        console.log('[auth] login 失败,转注册:', String(e));
+        return authApi.register(email, password);
+      });
+      console.log('[auth] 成功,服务器:', reachable);
       saveSession(data as never);
       // P0-1(第 27 轮):三态换号处理(明确换号清库/纯本地保留/残留清库),与 Web 同策略
       const action = await prepareAfterLogin(db, String((data as { user?: { id?: string } }).user?.id ?? ''));
@@ -231,7 +238,8 @@ function MeScreen({ logged, onLogged, syncText }: { logged: boolean; onLogged: (
       await initDb(); // 清库后重播种/重初始化
       void engine.syncOnce();
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : String(e));
+      console.log('[auth] 登录/注册失败:', String(e));
+      setMsg('连接服务器失败(公网与局域网均不可达)——已保持离线模式,本地记账不受影响;网络恢复后请重试登录');
     } finally {
       setBusy(false);
     }

@@ -14,6 +14,43 @@ export const SERVER_PRESETS: Array<{ label: string; url: string }> = [
   { label: '局域网 (树莓派)', url: 'http://192.168.1.16:60505' },
 ];
 
+/** 健康探测:2.5s 超时,只看 /healthz 是否 200 */
+async function probeServer(url: string, ms = 2500): Promise<boolean> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ms);
+    const res = await fetch(`${url}/healthz`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+let lastGoodServer: string | null = null;
+
+/**
+ * 故障转移链(用户契约):自定义地址 → 公网 frp → 局域网 → 全不可达时返回当前设置(离线模式)。
+ * 上次探测成功的地址优先快探(1.5s),避免每次都串等两个超时。
+ */
+export async function resolveServerUrl(): Promise<string> {
+  const stored = ((await metaGet(db, 'server_url')) as string) || '';
+  const candidates = [stored, DEFAULT_SERVER, ...SERVER_PRESETS.map((p) => p.url)]
+    .filter((v, i, a): v is string => !!v && a.indexOf(v) === i);
+  if (lastGoodServer && candidates.includes(lastGoodServer) && (await probeServer(lastGoodServer, 1500))) {
+    return lastGoodServer;
+  }
+  for (const url of candidates) {
+    if (await probeServer(url)) {
+      lastGoodServer = url;
+      console.log(`[server] 故障转移解析 → ${url}`);
+      return url;
+    }
+    console.log(`[server] 不可达: ${url}`);
+  }
+  return stored || DEFAULT_SERVER; // 全断:保持原设置,交由同步引擎进入离线态
+}
+
 /** token 存系统安全区(F-05):不再落 SQLite meta(整库加密外的第二道防线) */
 const SS_ACCESS = 'lo_access';
 const SS_REFRESH = 'lo_refresh';
@@ -66,7 +103,7 @@ export async function clearSession(): Promise<void> {
 
 // ---- 共享客户端(P1-2):apiFetch/401 刷新/auth 端点唯一实现 ----
 const client = createApiClient({
-  getServerUrl,
+  getServerUrl: resolveServerUrl,
   getAccessToken,
   getRefreshToken,
   onRefreshed: (pair) => saveSession(pair as Parameters<typeof saveSession>[0]),
