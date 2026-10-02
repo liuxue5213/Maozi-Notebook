@@ -1,6 +1,7 @@
 import './src/lib/polyfills'; // 必须最先:uuid@14 裸用全局 crypto,Hermes 没有,必须先垫上
 import React, { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { formatAmount, newId, type TransactionRow, type TransactionType } from '@ledgerone/domain';
 import { useSyncExternalStore } from 'react';
 import { engine, scheduleSync, snapshot, startMobileAutoSync } from './src/lib/sync';
@@ -34,6 +35,7 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { err
 }
 
 function AppInner() {
+  const insets = useSafeAreaInsets();
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState<Tab>('record');
   const [txs, setTxs] = useState<TransactionRow[]>([]);
@@ -93,7 +95,7 @@ function AppInner() {
   }
 
   return (
-    <View style={styles.app}>
+    <View style={[styles.app, { paddingTop: insets.top }]}>
       <Text style={styles.title}>帽子记账本</Text>
       <View style={styles.content}>
         {tab === 'record' && (
@@ -102,7 +104,7 @@ function AppInner() {
         {tab === 'list' && <ListScreen txs={txs} onRefresh={() => void refreshTxs()} />}
         {tab === 'me' && <MeScreen logged={logged} onLogged={(v) => setLogged(v)} syncText={`${sync.state}${sync.pending > 0 ? ` · 待同步 ${sync.pending}` : ''}`} />}
       </View>
-      <View style={styles.tabbar}>
+      <View style={[styles.tabbar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
         {([
           ['record', '记账'],
           ['list', '明细'],
@@ -340,8 +342,10 @@ const styles = StyleSheet.create({
 
 export default function App() {
   return (
-    <ErrorBoundary>
-      <AppInner />
-    </ErrorBoundary>
+    <SafeAreaProvider>
+      <ErrorBoundary>
+        <AppInner />
+      </ErrorBoundary>
+    </SafeAreaProvider>
   );
 }
