@@ -28,7 +28,9 @@ TARBALL=$(curl -fsSL --max-time 30 "$API" | json_asset_url server-deploy.tar.gz)
 # 国内直连 GitHub release-assets(Azure CDN)易断流:重试+断点续传
 ok=0
 for i in $(seq 1 8); do
-  curl -fSL --retry 3 --retry-all-errors -C - --max-time 600 -o "$WORK/pkg.tar.gz" "$TARBALL" && ok=1 && break
+  # 注意:不能用 -C - 与 -L 混用——重定向页会追加进半截文件导致损坏,重试必须整删重下
+  rm -f "$WORK/pkg.tar.gz"
+  curl -fSL --retry 3 --retry-all-errors --max-time 600 -o "$WORK/pkg.tar.gz" "$TARBALL" && ok=1 && break
   log "下载重试 $i"; sleep 5
 done
 [ "$ok" = 1 ] || { log "下载失败"; exit 1; }
