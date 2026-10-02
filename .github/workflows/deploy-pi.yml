@@ -12,6 +12,11 @@ on:
       - 'scripts/pi/**'
   workflow_dispatch:
 
+# 同一时间只允许一个部署 run,防止并发 clobber 上传同一 Release 资产导致包损坏
+concurrency:
+  group: deploy-pi
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
