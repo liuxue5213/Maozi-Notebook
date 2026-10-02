@@ -82,7 +82,12 @@ let cachedToken = false;
 export function refreshLoginCache(): void {
   void hasToken().then((t) => (cachedToken = t));
 }
+let autoSyncStarted = false;
+
 export function startMobileAutoSync(): void {
+  if (autoSyncStarted) return; // boot 重试会重复调用,防止叠加定时器/监听
+  autoSyncStarted = true;
+  refreshLoginCache();
   startAutoSync(engine, { isOnline: () => cachedToken });
   const sub = AppState.addEventListener('change', (state) => {
     refreshLoginCache();

@@ -16,14 +16,15 @@ export const SERVER_PRESETS: Array<{ label: string; url: string }> = [
 
 /** 健康探测:2.5s 超时,只看 /healthz 是否 200 */
 async function probeServer(url: string, ms = 2500): Promise<boolean> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
   try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), ms);
     const res = await fetch(`${url}/healthz`, { signal: ctrl.signal });
-    clearTimeout(timer);
     return res.ok;
   } catch {
     return false;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -33,9 +34,9 @@ let lastGoodServer: string | null = null;
  * 故障转移链(用户契约):自定义地址 → 公网 frp → 局域网 → 全不可达时返回当前设置(离线模式)。
  * 上次探测成功的地址优先快探(1.5s),避免每次都串等两个超时。
  */
-export async function resolveServerUrl(): Promise<string> {
+export async function resolveServerUrl(preferred?: string): Promise<string> {
   const stored = ((await metaGet(db, 'server_url')) as string) || '';
-  const candidates = [stored, DEFAULT_SERVER, ...SERVER_PRESETS.map((p) => p.url)]
+  const candidates = [preferred || stored, stored, DEFAULT_SERVER, ...SERVER_PRESETS.map((p) => p.url)]
     .filter((v, i, a): v is string => !!v && a.indexOf(v) === i);
   if (lastGoodServer && candidates.includes(lastGoodServer) && (await probeServer(lastGoodServer, 1500))) {
     return lastGoodServer;

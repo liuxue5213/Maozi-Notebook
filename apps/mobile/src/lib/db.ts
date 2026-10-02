@@ -18,15 +18,21 @@ function wrap(d: unknown): SQLiteLike {
     // SQLCipher 关键:密钥(PRAGMA key)只作用于当前连接,而 expo-sqlite 原生
     // withExclusiveTransactionAsync 会开第二条无密钥连接 → 读加密库必报
     // "file is not a database"。因此事务必须在同一条连接上用 BEGIN/COMMIT 实现。
-    withExclusiveTransactionAsync: async (task) => {
-      await c.execAsync('BEGIN EXCLUSIVE');
-      try {
-        await task(wrap(d));
-        await c.execAsync('COMMIT');
-      } catch (e) {
-        try { await c.execAsync('ROLLBACK'); } catch { /* 已回滚/连接失效 */ }
-        throw e;
-      }
+    withExclusiveTransactionAsync: (task) => {
+      // 同连接事务必须互斥:并发 BEGIN 会让后到者 ROLLBACK 掉先到者的未提交写入(静默丢数据)
+      const run = async () => {
+        await c.execAsync('BEGIN EXCLUSIVE');
+        try {
+          await task(wrap(d));
+          await c.execAsync('COMMIT');
+        } catch (e) {
+          try { await c.execAsync('ROLLBACK'); } catch { /* 已回滚/连接失效 */ }
+          throw e;
+        }
+      };
+      const next = txChain.then(run, run);
+      txChain = next.then(() => undefined, () => undefined);
+      return next;
     },
   };
 }
@@ -54,6 +60,7 @@ async function loadDbKey(): Promise<string> {
 }
 
 let real: SQLiteLike | null = null;
+let txChain: Promise<void> = Promise.resolve();
 
 /**
  * 打开加密库(F-05 / M16-F02):
@@ -80,9 +87,9 @@ export async function initEncryptedDb(): Promise<void> {
 export async function resetLocalDatabase(): Promise<void> {
   real = null;
   try {
-    SQLite.openDatabaseSync('ledgerone.db').execSync('PRAGMA close;');
+    SQLite.deleteDatabaseSync?.('ledgerone.db');
   } catch {
-    /* 可能未打开 */
+    /* 文件可能不存在 */
   }
   try {
     SQLite.deleteDatabaseSync?.('ledgerone.db');

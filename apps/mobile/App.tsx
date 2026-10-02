@@ -7,7 +7,7 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 import { formatAmount, newId, type TransactionRow, type TransactionType } from '@ledgerone/domain';
 import { useSyncExternalStore } from 'react';
 import { engine, scheduleSync, snapshot, startMobileAutoSync } from './src/lib/sync';
-import { initDb, listRecent, saveTx, topCategories, getActiveLedgerId, metaGet, metaSet, db } from './src/lib/store';
+import { initDb, resetInitCache, listRecent, saveTx, topCategories, getActiveLedgerId, metaGet, metaSet, db } from './src/lib/store';
 import { resetLocalDatabase } from './src/lib/db';
 import { prepareAfterLogin, saveLocal } from '@ledgerone/sqlite-sync';
 import { authApi, clearSession, getServerUrl, isLoggedIn, logout as logoutAll, saveSession, setServerUrl, SERVER_PRESETS, resolveServerUrl } from './src/lib/api';
@@ -29,6 +29,9 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { err
         <View style={{ flex: 1, padding: 24, paddingTop: 60, backgroundColor: '#fff' }}>
           <Text style={{ fontSize: 16, fontWeight: '700', color: '#c0392b', marginBottom: 12 }}>启动出错</Text>
           <Text style={{ fontSize: 12, color: '#333', fontFamily: 'monospace' }}>{String(this.state.err.stack || this.state.err.message || this.state.err)}</Text>
+          <Pressable style={{ marginTop: 16, backgroundColor: '#4361ee', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 20, alignSelf: 'flex-start' }} onPress={() => this.setState({ err: null })}>
+            <Text style={{ color: '#fff', fontSize: 14 }}>重试</Text>
+          </Pressable>
         </View>
       );
     }
@@ -80,7 +83,7 @@ function AppInner() {
         </Pressable>
         <Pressable
           style={{ marginTop: 10 }}
-          onPress={() => { void resetLocalDatabase().finally(() => { setReady(false); void boot(); }); }}
+          onPress={() => { void resetLocalDatabase().finally(() => { resetInitCache(); setReady(false); setBootErr(null); void boot(); }); }}
         >
           <Text style={{ color: '#c0392b', fontSize: 13 }}>重置本地数据(清除全部离线记录)</Text>
         </Pressable>
@@ -198,7 +201,7 @@ function BudgetCard() {
         </Pressable>
         {editing && (
           <View style={{ marginTop: 10, gap: 8 }}>
-            <TextInput style={styles.input} value={amount} onChangeText={(t) => setAmount(t.replace(/[^\\d.]/g, ''))} keyboardType="decimal-pad" placeholder="月度总预算,如 5000" placeholderTextColor="#b4bac6" />
+            <TextInput style={styles.input} value={amount} onChangeText={(t) => setAmount(t.replace(/[^\d.]/g, ''))} keyboardType="decimal-pad" placeholder="月度总预算,如 5000" placeholderTextColor="#b4bac6" />
             <Pressable style={[styles.saveBtn, !amount && styles.disabled]} onPress={() => void saveEdit()}>
               <Text style={styles.saveText}>保存预算</Text>
             </Pressable>
@@ -221,14 +224,14 @@ function BudgetCard() {
       </Pressable>
       {editing && (
         <View style={{ marginTop: 10, gap: 8 }}>
-          <TextInput style={styles.input} value={amount} onChangeText={(t) => setAmount(t.replace(/[^\\d.]/g, ''))} keyboardType="decimal-pad" placeholder="月度总预算" placeholderTextColor="#b4bac6" />
+          <TextInput style={styles.input} value={amount} onChangeText={(t) => setAmount(t.replace(/[^\d.]/g, ''))} keyboardType="decimal-pad" placeholder="月度总预算" placeholderTextColor="#b4bac6" />
           {(model?.items ?? []).map((it: unknown) => {
             const rec = it as unknown as Record<string, unknown>;
             const cid = String(rec.category_id);
             return (
               <View key={cid} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                 <Text style={{ fontSize: 12, color: '#4a5160', width: 70 }}>分类额度</Text>
-                <TextInput style={{ ...styles.input, flex: 1, minHeight: 38 }} value={catDrafts[cid] ?? ''} onChangeText={(t) => setCatDrafts((d) => ({ ...d, [cid]: t.replace(/[^\\d.]/g, '') }))} keyboardType="decimal-pad" placeholder="不限" placeholderTextColor="#b4bac6" />
+                <TextInput style={{ ...styles.input, flex: 1, minHeight: 38 }} value={catDrafts[cid] ?? ''} onChangeText={(t) => setCatDrafts((d) => ({ ...d, [cid]: t.replace(/[^\d.]/g, '') }))} keyboardType="decimal-pad" placeholder="不限" placeholderTextColor="#b4bac6" />
               </View>
             );
           })}
@@ -311,6 +314,7 @@ function RecordScreen({ onSaved }: { onSaved: () => void }) {
 
   return (
     <ScrollView contentContainerStyle={styles.form}>
+      <BudgetCard />
       <View style={styles.typeRow}>
         {(['expense', 'income'] as TransactionType[]).map((t) => (
           <Pressable key={t} style={[styles.typeBtn, type === t && styles.typeBtnActive]} onPress={() => { setType(t); setSelected(null); }}>
@@ -577,18 +581,30 @@ function MeScreen({ logged, onLogged, syncText }: { logged: boolean; onLogged: (
     setBusy(true);
     setMsg(null);
     try {
-      // 故障转移链:公网 frp → 局域网 → 全断时报错并保持离线(本地记账不受影响)
-      const reachable = await resolveServerUrl();
+      // 故障转移链:用户所选地址优先 → 公网 frp → 局域网 → 全断时报错并保持离线
+      const reachable = await resolveServerUrl(server.trim() || undefined);
       setServer(reachable);
       await setServerUrl(reachable);
-      let data = await authApi.login(email, password).catch((e) => {
-        console.log('[auth] login 失败,转注册:', String(e));
-        return authApi.register(email, password);
-      });
+      let data;
+      try {
+        data = await authApi.login(email, password);
+      } catch (loginErr) {
+        const ls = String(loginErr instanceof Error ? loginErr.message : loginErr);
+        // 密码错误(401)不该触发注册兜底
+        if (ls.includes('密码错误') || ls.includes('邮箱或密码错误')) throw loginErr;
+        console.log('[auth] login 失败,转注册:', ls);
+        data = await authApi.register(email, password);
+      }
       console.log('[auth] 成功,服务器:', reachable);
       saveSession(data as never);
       // P0-1(第 27 轮):三态换号处理(明确换号清库/纯本地保留/残留清库),与 Web 同策略
       const action = await prepareAfterLogin(db, String((data as { user?: { id?: string } }).user?.id ?? ''));
+      if (action === 'wiped') {
+        // wipeAllTables 不清 meta:seeded/active_ledger 残留会让新账号掉进"幽灵账本"
+        await metaSet(db, 'seeded', null);
+        await metaSet(db, 'active_ledger', null);
+        resetInitCache();
+      }
       onLogged(true);
       await initDb(); // 清库后重播种/重初始化
       await engine.syncOnce();
@@ -607,8 +623,12 @@ function MeScreen({ logged, onLogged, syncText }: { logged: boolean; onLogged: (
       }
       setMsg(action === 'wiped' ? '检测到账号切换,已清空本地数据并重新同步' : '登录成功,同步已开启');
     } catch (e) {
-      console.log('[auth] 登录/注册失败:', String(e));
-      setMsg('连接服务器失败(公网与局域网均不可达)——已保持离线模式,本地记账不受影响;网络恢复后请重试登录');
+      const m = e instanceof Error ? e.message : String(e);
+      console.log('[auth] 登录/注册失败:', m);
+      const network = /fetch failed|Connect|TIMEDOUT|timeout|不可达/i.test(m);
+      setMsg(network
+        ? '连接服务器失败(公网与局域网均不可达)——已保持离线模式,本地记账不受影响;网络恢复后请重试登录'
+        : m);
     } finally {
       setBusy(false);
     }
@@ -632,7 +652,7 @@ function MeScreen({ logged, onLogged, syncText }: { logged: boolean; onLogged: (
             {SERVER_PRESETS.map((p) => (
               <Pressable
                 key={p.url}
-                onPress={() => setServer(p.url)}
+                onPress={() => { setServer(p.url); void setServerUrl(p.url); }}
                 style={{
                   flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: 'center',
                   backgroundColor: server === p.url ? '#4361ee' : '#eef0f6',
