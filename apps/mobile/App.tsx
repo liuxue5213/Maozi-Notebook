@@ -1,6 +1,7 @@
 import './src/lib/polyfills';
 import { buildBudgetModel, type BudgetModel } from '@ledgerone/ledger-core';
-import { isValidAmount } from '@ledgerone/domain'; // 必须最先:uuid@14 裸用全局 crypto,Hermes 没有,必须先垫上
+import { isValidAmount } from '@ledgerone/domain';
+import { netSavings } from '@ledgerone/ledger-core'; // 必须最先:uuid@14 裸用全局 crypto,Hermes 没有,必须先垫上
 import React, { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -39,8 +40,222 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { err
   }
 }
 
+/** 分类管理:重命名 / 隐藏显示(v1;排序后续)。入口在「我的」页 */
+function CategoryManager({ onBack }: { onBack: () => void }) {
+  const [cats, setCats] = useState<Array<Record<string, unknown>>>([]);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  const [tab, setTab] = useState<'expense' | 'income'>('expense');
+
+  const load = async () => {
+    await initDb();
+    const ledgerId = await getActiveLedgerId();
+    const rows = await db.getAllAsync<Record<string, unknown>>(
+      'SELECT * FROM categories WHERE is_deleted = 0 AND ledger_id = ? ORDER BY kind, sort', [ledgerId]);
+    setCats(rows);
+  };
+  useEffect(() => { void load(); }, []);
+
+  const persist = async (row: Record<string, unknown>) => {
+    const now = Date.now();
+    await saveLocal(db, 'category', { ...row, client_version: Number(row.client_version ?? 0) + 1, updated_at: now } as never);
+  };
+
+  const rename = async (row: Record<string, unknown>) => {
+    const name = draft.trim().slice(0, 20);
+    setEditingId(null);
+    if (!name || name === row.name) return;
+    await persist({ ...row, name });
+    void load();
+  };
+
+  const toggleHidden = async (row: Record<string, unknown>) => {
+    await persist({ ...row, is_hidden: !row.is_hidden });
+    void load();
+  };
+
+  const groups = cats.filter((c) => c.kind === tab);
+  return (
+    <View style={{ flex: 1, backgroundColor: '#f6f7f9' }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', paddingTop: 50, paddingHorizontal: 12, paddingBottom: 8 }}>
+        <Pressable onPress={onBack}><Text style={{ fontSize: 16, color: '#4361ee' }}>‹ 返回</Text></Pressable>
+        <Text style={{ flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '700', color: '#1a1c23' }}>分类管理</Text>
+        <Text style={{ fontSize: 16, color: 'transparent' }}>‹</Text>
+      </View>
+      <View style={{ flexDirection: 'row', paddingHorizontal: 12, gap: 8, paddingBottom: 8 }}>
+        {(['expense', 'income'] as const).map((k) => (
+          <Pressable key={k} onPress={() => setTab(k)}
+            style={{ paddingVertical: 6, paddingHorizontal: 14, borderRadius: 14, backgroundColor: tab === k ? '#4361ee' : '#eef0f6' }}>
+            <Text style={{ fontSize: 13, color: tab === k ? '#fff' : '#4a5160' }}>{k === 'expense' ? '支出分类' : '收入分类'}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <ScrollView contentContainerStyle={{ padding: 12, gap: 6 }}>
+        {groups.map((row) => {
+          const id = String(row.id);
+          const hidden = !!row.is_hidden;
+          return (
+            <View key={id} style={{ backgroundColor: '#fff', borderRadius: 10, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Text style={{ fontSize: 18 }}>{String(row.icon)}</Text>
+              {editingId === id ? (
+                <TextInput
+                  style={{ flex: 1, borderBottomWidth: 1, borderColor: '#4361ee', fontSize: 14, color: '#1a1c23', paddingVertical: 2 }}
+                  value={draft} autoFocus onChangeText={(t) => setDraft(t.slice(0, 20))}
+                  onSubmitEditing={() => void rename(row)} onBlur={() => void rename(row)}
+                />
+              ) : (
+                <Text style={{ flex: 1, fontSize: 14, color: hidden ? '#b4bac6' : '#1a1c23' }}>
+                  {String(row.name)}{hidden ? '(已隐藏)' : ''}
+                </Text>
+              )}
+              {editingId !== id && (
+                <Pressable onPress={() => { setEditingId(id); setDraft(String(row.name)); }}>
+                  <Text style={{ color: '#4361ee', fontSize: 13 }}>重命名</Text>
+                </Pressable>
+              )}
+              <Pressable onPress={() => void toggleHidden(row)}>
+                <Text style={{ color: hidden ? '#1f9d6c' : '#8a93a5', fontSize: 13 }}>{hidden ? '显示' : '隐藏'}</Text>
+              </Pressable>
+            </View>
+          );
+        })}
+        {groups.length === 0 && <Text style={{ color: '#8a93a5', fontSize: 13 }}>暂无分类</Text>}
+      </ScrollView>
+    </View>
+  );
+}
+
+/** 存钱计划:列表 + 新建 + 进度(已存 = 期间净结余,复用 ledger-core netSavings) */
+function SavingsScreen({ onBack }: { onBack: () => void }) {
+  const [plans, setPlans] = useState<Array<Record<string, unknown> & { saved: number; pct: number }>>([]);
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState('');
+  const [goal, setGoal] = useState('');
+  const [ptype, setPtype] = useState<'yearly' | 'monthly'>('yearly');
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    await initDb();
+    const ledgerId = await getActiveLedgerId();
+    const rows = await db.getAllAsync<Record<string, unknown>>(
+      'SELECT * FROM savings_plans WHERE is_deleted = 0 AND ledger_id = ? ORDER BY created_at DESC', [ledgerId]);
+    const now = Date.now();
+    const out: Array<Record<string, unknown> & { saved: number; pct: number }> = [];
+    for (const p of rows) {
+      const start = Number(p.period_start), end = Math.min(Number(p.period_end), now);
+      const txs = await db.getAllAsync<{ type: string; amount_base: string; is_deleted: number }>(
+        'SELECT type, amount_base, is_deleted FROM transactions WHERE is_deleted = 0 AND ledger_id = ? AND happened_at >= ? AND happened_at < ?',
+        [ledgerId, start, end]);
+      const saved = Number(netSavings(txs as never));
+      const goalN = Number(p.goal_amount) || 1;
+      out.push({ ...p, saved, pct: Math.min(100, Math.round((saved / goalN) * 100)) });
+    }
+    setPlans(out);
+  };
+  useEffect(() => { void load(); }, []);
+
+  const create = async () => {
+    const nm = name.trim().slice(0, 50);
+    if (!nm || !isValidAmount(goal) || Number(goal) <= 0) return;
+    setBusy(true);
+    try {
+      await initDb();
+      const ledgerId = await getActiveLedgerId();
+      const now = Date.now();
+      const d = new Date(Number(now));
+      const year = d.getFullYear();
+      const period_start = new Date(year, ptype === 'yearly' ? 0 : d.getMonth(), 1).getTime();
+      const period_end = ptype === 'yearly' ? new Date(year + 1, 0, 1).getTime() : new Date(year, d.getMonth() + 1, 1).getTime();
+      const row = { id: newId(), ledger_id: ledgerId, name: nm, goal_amount: Number(goal).toFixed(2),
+        period_type: ptype, period_start, period_end, expected_income: null, baseline_months: 6,
+        allocation: 'even', promo_months: null, exclude_oneoff: false, linked_account_id: null,
+        status: 'active', client_version: 1, server_version: null, is_deleted: false, deleted_at: null,
+        created_at: now, updated_at: now };
+      await saveLocal(db, 'savings_plan', row as never);
+      setName(''); setGoal(''); setCreating(false);
+      await load();
+    } finally { setBusy(false); }
+  };
+
+  const setStatus = async (row: Record<string, unknown>, status: string) => {
+    const now = Date.now();
+    await saveLocal(db, 'savings_plan', { ...row, status, client_version: Number(row.client_version ?? 0) + 1, updated_at: now } as never);
+    void load();
+  };
+
+  const removePlan = async (row: Record<string, unknown>) => {
+    const now = Date.now();
+    await saveLocal(db, 'savings_plan', { ...row, is_deleted: true, deleted_at: now, client_version: Number(row.client_version ?? 0) + 1, updated_at: now } as never, { op: 'delete' });
+    void load();
+  };
+
+  return (
+    <View style={{ flex: 1, backgroundColor: '#f6f7f9' }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', paddingTop: 50, paddingHorizontal: 12, paddingBottom: 8 }}>
+        <Pressable onPress={onBack}><Text style={{ fontSize: 16, color: '#4361ee' }}>‹ 返回</Text></Pressable>
+        <Text style={{ flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '700', color: '#1a1c23' }}>存钱计划</Text>
+        <Pressable onPress={() => setCreating((v) => !v)}><Text style={{ fontSize: 20, color: '#4361ee' }}>＋</Text></Pressable>
+      </View>
+      <ScrollView contentContainerStyle={{ padding: 12, gap: 10 }}>
+        {creating && (
+          <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 14, gap: 8 }}>
+            <TextInput style={styles.input} value={name} onChangeText={(t) => setName(t.slice(0, 50))} placeholder="计划名(如 三亚旅行)" placeholderTextColor="#b4bac6" />
+            <TextInput style={styles.input} value={goal} onChangeText={(t) => setGoal(t.replace(/[^\\d.]/g, ''))} keyboardType="decimal-pad" placeholder="目标金额" placeholderTextColor="#b4bac6" />
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              {(['yearly', 'monthly'] as const).map((t) => (
+                <Pressable key={t} onPress={() => setPtype(t)}
+                  style={{ flex: 1, paddingVertical: 8, borderRadius: 10, alignItems: 'center', backgroundColor: ptype === t ? '#4361ee' : '#eef0f6' }}>
+                  <Text style={{ fontSize: 13, color: ptype === t ? '#fff' : '#4a5160' }}>{t === 'yearly' ? '年度计划' : '月度计划'}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <Pressable style={[styles.saveBtn, busy && styles.disabled]} onPress={() => void create()}>
+              <Text style={styles.saveText}>{busy ? '保存中…' : '创建计划'}</Text>
+            </Pressable>
+          </View>
+        )}
+        {plans.map((p) => {
+          const status = String(p.status);
+          return (
+            <View key={String(p.id)} style={{ backgroundColor: '#fff', borderRadius: 12, padding: 14 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Text style={{ fontSize: 14, fontWeight: '700', color: '#1a1c23' }}>{String(p.name)}</Text>
+                <Text style={{ fontSize: 11, color: status === 'active' ? '#1f9d6c' : '#8a93a5' }}>
+                  {status === 'active' ? '进行中' : status === 'paused' ? '已暂停' : status === 'achieved' ? '已达成' : '已归档'}
+                </Text>
+              </View>
+              <Text style={{ fontSize: 12, color: '#4a5160', marginVertical: 4 }}>
+                已存 ¥{formatAmount(String(p.saved))} / 目标 ¥{formatAmount(String(p.goal_amount))} · {String(p.period_type) === 'yearly' ? '年度' : '月度'}
+              </Text>
+              <View style={{ height: 6, backgroundColor: '#eef0f6', borderRadius: 3 }}>
+                <View style={{ height: 6, width: `${Math.max(2, Number(p.pct))}%`, backgroundColor: '#1f9d6c', borderRadius: 3 }} />
+              </View>
+              <View style={{ flexDirection: 'row', gap: 14, marginTop: 8 }}>
+                <Pressable onPress={() => void setStatus(p, status === 'paused' ? 'active' : 'paused')}>
+                  <Text style={{ fontSize: 12, color: '#4361ee' }}>{status === 'paused' ? '继续' : '暂停'}</Text>
+                </Pressable>
+                {p.saved && Number(p.goal_amount) > 0 && Number(p.saved) >= Number(p.goal_amount) && (
+                  <Pressable onPress={() => void setStatus(p, 'achieved')}>
+                    <Text style={{ fontSize: 12, color: '#1f9d6c' }}>标记达成</Text>
+                  </Pressable>
+                )}
+                <Pressable onPress={() => void removePlan(p)}>
+                  <Text style={{ fontSize: 12, color: '#d64545' }}>删除</Text>
+                </Pressable>
+              </View>
+            </View>
+          );
+        })}
+        {plans.length === 0 && !creating && <Text style={{ color: '#8a93a5', fontSize: 13, textAlign: 'center' }}>还没有存钱计划,点右上角 ＋ 创建</Text>}
+      </ScrollView>
+    </View>
+  );
+}
+
+
 function AppInner() {
   const insets = useSafeAreaInsets();
+  const [sub, setSub] = useState<'none' | 'cats' | 'savings'>('none');
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState<Tab>('record');
   const [txs, setTxs] = useState<TransactionRow[]>([]);
@@ -99,6 +314,8 @@ function AppInner() {
     );
   }
 
+  if (sub === 'cats') return <CategoryManager onBack={() => setSub('none')} />;
+  if (sub === 'savings') return <SavingsScreen onBack={() => setSub('none')} />;
   return (
     <View style={[styles.app, { paddingTop: insets.top }]}>
       <Text style={styles.title}>帽子记账本</Text>
@@ -108,7 +325,7 @@ function AppInner() {
         )}
         {tab === 'list' && <ListScreen />}
         {tab === 'report' && <ReportScreen />}
-        {tab === 'me' && <MeScreen logged={logged} onLogged={(v) => setLogged(v)} syncText={`${sync.state}${sync.pending > 0 ? ` · 待同步 ${sync.pending}` : ''}`} />}
+        {tab === 'me' && <MeScreen logged={logged} onLogged={(v) => setLogged(v)} onOpen={(p) => setSub(p)} syncText={`${sync.state}${sync.pending > 0 ? ` · 待同步 ${sync.pending}` : ''}`} />}
       </View>
       <View style={[styles.tabbar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
         {([
@@ -553,7 +770,7 @@ function ReportScreen() {
   );
 }
 
-function MeScreen({ logged, onLogged, syncText }: { logged: boolean; onLogged: (v: boolean) => void; syncText: string }) {
+function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onLogged: (v: boolean) => void; syncText: string; onOpen: (p: 'cats' | 'savings') => void }) {
   const [server, setServer] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -645,6 +862,14 @@ function MeScreen({ logged, onLogged, syncText }: { logged: boolean; onLogged: (
       <Text style={styles.meTitle}>{logged ? `${me?.nickname || me?.email || '已登录'} · 云同步开启` : '未登录 · 纯本地模式'}</Text>
       <Text style={styles.muted}>离线也能记账:数据先存本机,连上服务器后自动同步</Text>
       <Text style={styles.muted}>同步状态:{syncText}</Text>
+      <View style={{ flexDirection: 'row', gap: 8, marginTop: 10, marginBottom: 4 }}>
+        <Pressable style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('cats')}>
+          <Text style={{ fontSize: 13, color: '#1a1c23' }}>🗂 分类管理</Text>
+        </Pressable>
+        <Pressable style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('savings')}>
+          <Text style={{ fontSize: 13, color: '#1a1c23' }}>🐷 存钱计划</Text>
+        </Pressable>
+      </View>
       {!logged && (
         <>
           <Text style={styles.label}>服务器</Text>
