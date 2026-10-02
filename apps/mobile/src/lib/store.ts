@@ -47,10 +47,14 @@ function stamp(): Stamp {
 }
 
 async function ensureSeed(): Promise<void> {
-  if (await metaGet(db, 'seeded')) return;
+  console.log('[boot] seed:meta-get:start');
+  if (await metaGet(db, 'seeded')) { console.log('[boot] seed:already'); return; }
+  console.log('[boot] seed:meta-get:ok');
   const ledgerId = newId();
+  console.log('[boot] seed:newId:ok');
   const ledger = { id: ledgerId, owner_user_id: 'local', name: '我的账本', type: 'personal', icon: '📒', sort: 0, ...stamp() };
   await saveLocal(db, 'ledger', ledger as AnyRow);
+  console.log('[boot] seed:ledger:ok');
 
   const defs = [
     ...PRESET_EXPENSE_CATEGORIES.map((d) => ({ ...d, kind: 'expense' as const })),
@@ -79,8 +83,10 @@ async function ensureSeed(): Promise<void> {
     };
     await saveLocal(db, 'account', a as AnyRow);
   }
+  console.log('[boot] seed:cats+accounts:ok');
   await metaSet(db, 'active_ledger', ledgerId);
   await metaSet(db, 'seeded', true);
+  console.log('[boot] seed:meta-set:ok');
 }
 
 export async function getActiveLedgerId(): Promise<string> {

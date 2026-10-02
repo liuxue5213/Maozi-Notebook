@@ -60,6 +60,8 @@ export async function initEncryptedDb(): Promise<void> {
   console.log('[boot] sqlite:pragma-key:ok');
   await conn.execAsync('SELECT count(*) FROM sqlite_master'); // 握手:密钥/库完整性即时校验
   console.log('[boot] sqlite:handshake:ok');
+  const probe = await conn.getAllAsync('SELECT count(*) AS n FROM sqlite_master');
+  console.log('[boot] prepare-probe:ok', JSON.stringify(probe));
   real = wrap(conn);
 }
 
