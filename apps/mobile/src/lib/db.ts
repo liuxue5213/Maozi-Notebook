@@ -10,13 +10,24 @@ function wrap(d: unknown): SQLiteLike {
     execAsync: (sql: string) => Promise<unknown>;
     runAsync: (sql: string, params?: unknown[]) => Promise<unknown>;
     getAllAsync: <T>(sql: string, params?: unknown[]) => Promise<T[]>;
-    withExclusiveTransactionAsync: (task: (tx: unknown) => Promise<void>) => Promise<void>;
   };
   return {
     execAsync: (sql) => c.execAsync(sql),
     runAsync: (sql, params) => c.runAsync(sql, params),
     getAllAsync: <T>(sql: string, params?: unknown[]) => c.getAllAsync<T>(sql, params),
-    withExclusiveTransactionAsync: (task) => c.withExclusiveTransactionAsync((tx) => task(wrap(tx))),
+    // SQLCipher 关键:密钥(PRAGMA key)只作用于当前连接,而 expo-sqlite 原生
+    // withExclusiveTransactionAsync 会开第二条无密钥连接 → 读加密库必报
+    // "file is not a database"。因此事务必须在同一条连接上用 BEGIN/COMMIT 实现。
+    withExclusiveTransactionAsync: async (task) => {
+      await c.execAsync('BEGIN EXCLUSIVE');
+      try {
+        await task(wrap(d));
+        await c.execAsync('COMMIT');
+      } catch (e) {
+        try { await c.execAsync('ROLLBACK'); } catch { /* 已回滚/连接失效 */ }
+        throw e;
+      }
+    },
   };
 }
 
