@@ -4,6 +4,7 @@ import { formatAmount, newId, type TransactionRow, type TransactionType } from '
 import { useSyncExternalStore } from 'react';
 import { engine, scheduleSync, snapshot, startMobileAutoSync } from './src/lib/sync';
 import { initDb, listRecent, saveTx, topCategories, getActiveLedgerId, metaGet, metaSet, db } from './src/lib/store';
+import { resetLocalDatabase } from './src/lib/db';
 import { prepareAfterLogin } from '@ledgerone/sqlite-sync';
 import { authApi, clearSession, getServerUrl, isLoggedIn, logout as logoutAll, saveSession, setServerUrl, SERVER_PRESETS } from './src/lib/api';
 
@@ -43,14 +44,44 @@ function AppInner() {
     setTxs((await listRecent()) as unknown as TransactionRow[]);
   }, []);
 
-  useEffect(() => {
-    void initDb().then(async () => {
+  const [bootErr, setBootErr] = useState<string | null>(null);
+
+  const boot = useCallback(async () => {
+    setBootErr(null);
+    setLoading('加载中…');
+    const watchdog = setTimeout(() => setBootErr('初始化超时(20秒)——请点「重试」;若反复出现,请重启手机(系统安全区无响应)或「重置本地数据」'), 20000);
+    try {
+      await initDb();
       await refreshTxs();
       setLogged(await isLoggedIn());
       setReady(true);
       startMobileAutoSync(); // P0-2:定时兜底 + 进前台补同步
-    });
+    } catch (e) {
+      setBootErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      clearTimeout(watchdog);
+    }
   }, [refreshTxs]);
+
+  useEffect(() => { void boot(); }, [boot]);
+
+  if (bootErr) {
+    return (
+      <View style={styles.center}>
+        <Text style={{ color: '#c0392b', fontSize: 15, fontWeight: '700', marginBottom: 10 }}>初始化失败</Text>
+        <Text style={{ ...styles.muted, textAlign: 'center', paddingHorizontal: 24 }}>{bootErr}</Text>
+        <Pressable style={{ ...styles.saveBtn, marginTop: 16, minWidth: 180 }} onPress={() => void boot()}>
+          <Text style={styles.saveText}>重试</Text>
+        </Pressable>
+        <Pressable
+          style={{ marginTop: 10 }}
+          onPress={() => { void resetLocalDatabase().finally(() => { setReady(false); void boot(); }); }}
+        >
+          <Text style={{ color: '#c0392b', fontSize: 13 }}>重置本地数据(清除全部离线记录)</Text>
+        </Pressable>
+      </View>
+    );
+  }
 
   if (!ready) {
     return (

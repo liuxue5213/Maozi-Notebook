@@ -20,13 +20,24 @@ function wrap(d: unknown): SQLiteLike {
   };
 }
 
+/** SecureStore 兜底超时:个别国产 ROM 的 Keystore 会无响应挂起(不抛错),必须带超时暴露 */
+async function withTimeout<T>(p: Promise<T>, ms: number, tag: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`安全区访问超时(${tag},${ms}ms)——多为系统 Keystore 无响应,请重启手机后重试`)), ms)),
+  ]);
+}
+
 /** 整库加密密钥:随机 32 字节 hex,只存系统安全区(iOS Keychain / Android Keystore) */
 async function loadDbKey(): Promise<string> {
-  let key = await SecureStore.getItemAsync(DB_KEY_STORE);
+  console.log('[boot] keystore:get:start');
+  let key = await withTimeout(SecureStore.getItemAsync(DB_KEY_STORE), 4000, 'read');
+  console.log('[boot] keystore:get:done');
   if (!key) {
     const bytes = await Crypto.getRandomBytesAsync(32);
     key = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-    await SecureStore.setItemAsync(DB_KEY_STORE, key);
+    await withTimeout(SecureStore.setItemAsync(DB_KEY_STORE, key), 4000, 'write');
+    console.log('[boot] keystore:set:done');
   }
   return key;
 }
@@ -43,9 +54,12 @@ let real: SQLiteLike | null = null;
 export async function initEncryptedDb(): Promise<void> {
   if (real) return;
   const key = await loadDbKey();
+  console.log('[boot] sqlite:open');
   const conn = SQLite.openDatabaseSync('ledgerone.db');
   await conn.execAsync(`PRAGMA key = "x'${key}'";`);
+  console.log('[boot] sqlite:pragma-key:ok');
   await conn.execAsync('SELECT count(*) FROM sqlite_master'); // 握手:密钥/库完整性即时校验
+  console.log('[boot] sqlite:handshake:ok');
   real = wrap(conn);
 }
 
