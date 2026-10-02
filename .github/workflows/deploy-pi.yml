@@ -1,0 +1,50 @@
+name: Deploy server to Pi
+
+# 服务端代码变更 → 构建部署包 → 发布到 pi-latest Release
+# 树莓派侧由 ledgerone-autodeploy.timer 每 5 分钟轮询该 Release 自更新(见 scripts/pi/)
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/server/**'
+      - 'packages/**'
+      - '.github/workflows/deploy-pi.yml'
+      - 'scripts/pi/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build server and workspace deps
+        run: pnpm exec turbo run build --filter=@ledgerone/server
+
+      - name: Package pruned deploy bundle
+        run: |
+          pnpm --filter @ledgerone/server deploy --prod --legacy /tmp/pi-deploy
+          python3 scripts/pi/prune-deploy.py /tmp/pi-deploy
+          echo "${GITHUB_SHA}" > /tmp/pi-deploy/DEPLOY_VERSION
+          tar czf /tmp/server-deploy.tar.gz -C /tmp pi-deploy
+          cp /tmp/pi-deploy/DEPLOY_VERSION /tmp/VERSION
+          du -sh /tmp/server-deploy.tar.gz
+
+      - name: Publish to pi-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view pi-latest >/dev/null 2>&1 || gh release create pi-latest --title "Pi server deploy" --notes "自动构建,树莓派定时拉取" --prerelease
+          gh release upload pi-latest /tmp/server-deploy.tar.gz /tmp/VERSION --clobber
