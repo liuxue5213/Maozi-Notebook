@@ -18,9 +18,13 @@ export function initDb(): Promise<void> {
   ready ??= (async () => {
     try {
       await initEncryptedDb();
+      console.log('[boot] encrypted-db:ok');
       await initSchema(db);
+      console.log('[boot] schema:ok');
       await ensureSeed();
+      console.log('[boot] seed:ok');
     } catch (e) {
+      console.log('[boot] initDb failed:', e instanceof Error ? `${e.message}\n${e.stack ?? ''}` : String(e));
       ready = null;
       throw e;
     }

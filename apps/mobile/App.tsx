@@ -69,7 +69,7 @@ function AppInner() {
     return (
       <View style={styles.center}>
         <Text style={{ color: '#c0392b', fontSize: 15, fontWeight: '700', marginBottom: 10 }}>初始化失败</Text>
-        <Text style={{ ...styles.muted, textAlign: 'center', paddingHorizontal: 24 }}>{bootErr}</Text>
+        <Text style={{ ...styles.muted, textAlign: 'center', paddingHorizontal: 24, fontSize: 11 }}>{bootErr}</Text>
         <Pressable style={{ ...styles.saveBtn, marginTop: 16, minWidth: 180 }} onPress={() => void boot()}>
           <Text style={styles.saveText}>重试</Text>
         </Pressable>
