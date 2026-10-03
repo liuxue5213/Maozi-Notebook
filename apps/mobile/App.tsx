@@ -3,7 +3,7 @@ import { buildBudgetModel, type BudgetModel } from '@ledgerone/ledger-core';
 import { isValidAmount } from '@ledgerone/domain';
 import { netSavings } from '@ledgerone/ledger-core'; // 必须最先:uuid@14 裸用全局 crypto,Hermes 没有,必须先垫上
 import React, { useCallback, useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { BackHandler, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { formatAmount, newId, type TransactionRow, type TransactionType } from '@ledgerone/domain';
 import { useSyncExternalStore } from 'react';
@@ -314,6 +314,16 @@ function AppInner() {
     );
   }
 
+  // 安卓返回键:子页→返回列表;非首页 tab→回记账;首页→系统默认(退出)
+  useEffect(() => {
+    const sub_ = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (sub !== 'none') { setSub('none'); return true; }
+      if (tab !== 'record') { setTab('record'); return true; }
+      return false;
+    });
+    return () => sub_.remove();
+  }, [sub, tab]);
+
   if (sub === 'cats') return <CategoryManager onBack={() => setSub('none')} />;
   if (sub === 'savings') return <SavingsScreen onBack={() => setSub('none')} />;
   return (
@@ -470,6 +480,17 @@ function RecordScreen({ onSaved }: { onSaved: () => void }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [newCat, setNewCat] = useState('');
+  const [accounts, setAccounts] = useState<Array<{ id: string; name: string }>>([]);
+  const [fromAcc, setFromAcc] = useState<string | null>(null);
+  const [toAcc, setToAcc] = useState<string | null>(null);
+
+  const refreshAccounts = async () => {
+    const ledgerId = await getActiveLedgerId();
+    const rows = await db.getAllAsync<{ id: string; name: string }>(
+      'SELECT id, name FROM accounts WHERE is_deleted = 0 AND ledger_id = ? ORDER BY sort', [ledgerId]);
+    setAccounts(rows);
+    setFromAcc((prev) => prev ?? rows[0]?.id ?? null);
+  };
 
   const refreshCats = async () => {
     setCats((await topCategories(type === 'income' ? 'income' : 'expense')) as unknown as Cat[]);
@@ -480,6 +501,7 @@ function RecordScreen({ onSaved }: { onSaved: () => void }) {
       setAdding(false);
       setNewCat('');
       await refreshCats();
+      await refreshAccounts();
     });
   }, [type]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -508,15 +530,19 @@ function RecordScreen({ onSaved }: { onSaved: () => void }) {
 
   const save = async () => {
     const v = Number(amount);
-    if (!v || v <= 0 || !selected) return;
+    if (!v || v <= 0) return;
+    if (type === 'transfer') {
+      if (!fromAcc || !toAcc || fromAcc === toAcc) return;
+    } else if (!selected) return;
     const ledgerId = await getActiveLedgerId();
     if (!ledgerId) return;
     const now = Date.now();
     const tx = {
       id: newId(), ledger_id: ledgerId, user_id: 'local', member_id: null, type,
       amount: v.toFixed(2), currency: 'CNY', amount_base: v.toFixed(2), exchange_rate: null,
-      category_id: selected, account_id: (await db.getAllAsync<{ id: string }>('SELECT id FROM accounts WHERE is_deleted = 0 ORDER BY sort LIMIT 1'))[0]?.id ?? '',
-      to_account_id: null, happened_at: now, note: '', is_refunded: 0, refund_of_id: null,
+      category_id: type === 'transfer' ? null : selected,
+      account_id: fromAcc ?? (await db.getAllAsync<{ id: string }>('SELECT id FROM accounts WHERE is_deleted = 0 ORDER BY sort LIMIT 1'))[0]?.id ?? '',
+      to_account_id: type === 'transfer' ? toAcc : null, happened_at: now, note: '', is_refunded: 0, refund_of_id: null,
       reimburse_status: null, exclude_from_budget: 0, attachment_count: 0, source: 'manual',
       client_version: 1, server_version: null, is_deleted: 0, deleted_at: null, created_at: now, updated_at: now,
     };
@@ -533,9 +559,9 @@ function RecordScreen({ onSaved }: { onSaved: () => void }) {
     <ScrollView contentContainerStyle={styles.form}>
       <BudgetCard />
       <View style={styles.typeRow}>
-        {(['expense', 'income'] as TransactionType[]).map((t) => (
+        {(['expense', 'income', 'transfer'] as TransactionType[]).map((t) => (
           <Pressable key={t} style={[styles.typeBtn, type === t && styles.typeBtnActive]} onPress={() => { setType(t); setSelected(null); }}>
-            <Text style={[styles.typeText, type === t && styles.typeTextActive]}>{t === 'expense' ? '支出' : '收入'}</Text>
+            <Text style={[styles.typeText, type === t && styles.typeTextActive]}>{t === 'expense' ? '支出' : t === 'income' ? '收入' : '转账'}</Text>
           </Pressable>
         ))}
       </View>
@@ -547,6 +573,23 @@ function RecordScreen({ onSaved }: { onSaved: () => void }) {
         placeholder="0.00"
         placeholderTextColor="#b4bac6"
       />
+      {type === 'transfer' ? (
+        <View style={{ gap: 8, marginBottom: 8 }}>
+          {([['转出账户', fromAcc, setFromAcc], ['转入账户', toAcc, setToAcc]] as const).map(([label, val, setter], idx) => (
+            <View key={label}>
+              <Text style={{ fontSize: 12, color: '#4a5160', marginBottom: 4 }}>{label}</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                {accounts.map((a) => (
+                  <Pressable key={a.id} onPress={() => setter(a.id)}
+                    style={{ paddingVertical: 6, paddingHorizontal: 12, borderRadius: 14, backgroundColor: val === a.id ? '#4361ee' : '#eef0f6' }}>
+                    <Text style={{ fontSize: 12, color: val === a.id ? '#fff' : '#4a5160' }}>{a.name}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          ))}
+        </View>
+      ) : (
       <View style={styles.catGrid}>
         {cats.map((c) => (
           <Pressable key={c.id} style={[styles.catBtn, selected === c.id && styles.catBtnActive]} onPress={() => setSelected(c.id)}>
@@ -576,8 +619,9 @@ function RecordScreen({ onSaved }: { onSaved: () => void }) {
           </View>
         )}
       </View>
-      <Pressable style={[styles.saveBtn, (!amount || !selected) && styles.disabled]} onPress={() => void save()}>
-        <Text style={styles.saveText}>保存{amount && selected ? ` ¥${formatAmount(amount)}` : ''}</Text>
+      )}
+      <Pressable style={[styles.saveBtn, (!amount || (type !== 'transfer' && !selected) || (type === 'transfer' && (!fromAcc || fromAcc === toAcc))) && styles.disabled]} onPress={() => void save()}>
+        <Text style={styles.saveText}>保存{amount ? ` ¥${formatAmount(amount)}` : ''}</Text>
       </Pressable>
       {msg && <Text style={styles.msg}>{msg}</Text>}
     </ScrollView>
@@ -605,6 +649,10 @@ function ListScreen() {
   const [busy, setBusy] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [monthSum, setMonthSum] = useState<{ income: number; expense: number }>({ income: 0, expense: 0 });
+  const [editRow, setEditRow] = useState<TransactionRow | null>(null);
+  const [editAmount, setEditAmount] = useState('');
+  const [editNote, setEditNote] = useState('');
+  const [accounts, setAccounts] = useState<Array<{ id: string; name: string }>>([]);
   const mr = monthRange(monthOffset);
 
   const load = async (off: number, replace: boolean) => {
@@ -613,6 +661,7 @@ function ListScreen() {
       await initDb();
       const ledgerId = await getActiveLedgerId();
       if (!ledgerId) return;
+      void db.getAllAsync<{ id: string; name: string }>('SELECT id, name FROM accounts WHERE is_deleted = 0 AND ledger_id = ? ORDER BY sort', [ledgerId]).then(setAccounts);
       const clauses = ['t.is_deleted = 0', 't.ledger_id = ?', 't.happened_at >= ?', 't.happened_at < ?'];
       const params: Array<string | number> = [ledgerId, mr.start, mr.end];
       if (typeFilter !== 'all') { clauses.push('t.type = ?'); params.push(typeFilter); }
@@ -667,15 +716,15 @@ function ListScreen() {
       </View>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.list}>
         {rows.map((t) => (
-          <View key={t.id} style={styles.txRow}>
+          <Pressable key={t.id} style={styles.txRow} onPress={() => { setEditRow(t); setEditAmount(String(t.amount)); setEditNote(String(t.note ?? '')); }}>
             <View style={styles.txMain}>
-              <Text style={styles.txNote}>{t.note || t.cat_name || (t.type === 'income' ? '收入' : '支出')}</Text>
+              <Text style={styles.txNote}>{t.note || t.cat_name || (t.type === 'income' ? '收入' : t.type === 'transfer' ? '转账' : '支出')}{t.type === 'transfer' ? ' → ' + (accounts.find((a) => a.id === t.to_account_id)?.name ?? '') : ''}</Text>
               <Text style={styles.txDate}>{new Date(t.happened_at).toLocaleString('zh-CN')}{t.cat_name ? ` · ${t.cat_name}` : ''}</Text>
             </View>
             <Text style={[styles.txAmount, { color: t.type === 'income' ? '#1f9d6c' : '#1a1c23' }]}>
               {t.type === 'income' ? '+' : '-'}¥{formatAmount(String(t.amount))}
             </Text>
-          </View>
+          </Pressable>
         ))}
         {rows.length === 0 && !busy && <Text style={styles.muted}>本月暂无流水</Text>}
         {hasMore && (
@@ -684,6 +733,47 @@ function ListScreen() {
           </Pressable>
         )}
       </ScrollView>
+      {editRow && (
+        <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' }}>
+          <View style={{ backgroundColor: '#fff', borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: 16, gap: 10 }}>
+            <Text style={{ fontSize: 15, fontWeight: '700', color: '#1a1c23' }}>编辑流水</Text>
+            {editRow.type !== 'transfer' && (
+              <TextInput style={styles.input} value={editAmount} onChangeText={(t) => setEditAmount(t.replace(/[^\d.]/g, ''))} keyboardType="decimal-pad" placeholder="金额" placeholderTextColor="#b4bac6" />
+            )}
+            <TextInput style={styles.input} value={editNote} onChangeText={(t) => setEditNote(t)} placeholder="备注" placeholderTextColor="#b4bac6" />
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              <Pressable style={{ ...styles.saveBtn, flex: 1 }}
+                onPress={() => {
+                  const now = Date.now();
+                  const patch: Record<string, unknown> = { client_version: Number(editRow.client_version ?? 0) + 1, updated_at: now };
+                  if (editRow.type !== 'transfer' && isValidAmount(editAmount) && Number(editAmount) > 0) {
+                    patch.amount = Number(editAmount).toFixed(2); patch.amount_base = Number(editAmount).toFixed(2);
+                  }
+                  patch.note = editNote;
+                  void (async () => {
+                    await saveLocal(db, 'transaction', { ...editRow, ...patch } as never);
+                    setEditRow(null); setOffset(0); void load(0, true); scheduleSync();
+                  })();
+                }}>
+                <Text style={styles.saveText}>保存</Text>
+              </Pressable>
+              <Pressable style={{ ...styles.saveBtn, flex: 1, backgroundColor: '#d64545' }}
+                onPress={() => {
+                  const now = Date.now();
+                  void (async () => {
+                    await saveLocal(db, 'transaction', { ...editRow, is_deleted: true, deleted_at: now, client_version: Number(editRow.client_version ?? 0) + 1, updated_at: now } as never, { op: 'delete' });
+                    setEditRow(null); setOffset(0); void load(0, true); scheduleSync();
+                  })();
+                }}>
+                <Text style={styles.saveText}>删除</Text>
+              </Pressable>
+              <Pressable style={{ ...styles.saveBtn, flex: 1, backgroundColor: '#eef0f6' }} onPress={() => setEditRow(null)}>
+                <Text style={{ ...styles.saveText, color: '#1a1c23' }}>取消</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -868,6 +958,14 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
         </Pressable>
         <Pressable style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('savings')}>
           <Text style={{ fontSize: 13, color: '#1a1c23' }}>🐷 存钱计划</Text>
+        </Pressable>
+      </View>
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <Pressable style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center', opacity: 0.5 }} onPress={() => setMsg('导入账单即将上线')}>
+          <Text style={{ fontSize: 13, color: '#1a1c23' }}>📥 导入账单</Text>
+        </Pressable>
+        <Pressable style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center', opacity: 0.5 }} onPress={() => setMsg('循环记账即将上线')}>
+          <Text style={{ fontSize: 13, color: '#1a1c23' }}>🔁 循环记账</Text>
         </Pressable>
       </View>
       {!logged && (
