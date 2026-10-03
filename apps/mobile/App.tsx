@@ -635,6 +635,15 @@ function AppInner() {
     }
   }, [refreshTxs]);
 
+  useEffect(() => {
+    const sub_ = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (sub !== 'none') { setSub('none'); return true; }
+      if (tab !== 'record') { setTab('record'); return true; }
+      return false;
+    });
+    return () => sub_.remove();
+  }, [sub, tab]);
+
   useEffect(() => { void boot(); }, [boot]);
 
   if (bootErr) {
@@ -664,15 +673,6 @@ function AppInner() {
   }
 
   // 安卓返回键:子页→返回列表;非首页 tab→回记账;首页→系统默认(退出)
-  useEffect(() => {
-    const sub_ = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (sub !== 'none') { setSub('none'); return true; }
-      if (tab !== 'record') { setTab('record'); return true; }
-      return false;
-    });
-    return () => sub_.remove();
-  }, [sub, tab]);
-
   if (sub === 'cats') return <CategoryManager onBack={() => setSub('none')} />;
   if (sub === 'savings') return <SavingsScreen onBack={() => setSub('none')} />;
   if (sub === 'import') return <ImportScreen onBack={() => setSub('none')} />;
