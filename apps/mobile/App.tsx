@@ -1,13 +1,13 @@
-import './src/lib/polyfills';
-import { buildBudgetModel, type BudgetModel } from '@ledgerone/ledger-core';
-import { isValidAmount } from '@ledgerone/domain';
-import { netSavings } from '@ledgerone/ledger-core'; // 必须最先:uuid@14 裸用全局 crypto,Hermes 没有,必须先垫上
+import './src/lib/polyfills'; // 必须最先:uuid@14 裸用全局 crypto,Hermes 没有,必须先垫上
+import { buildBudgetModel, netSavings, type BudgetModel } from '@ledgerone/ledger-core';
+import { isValidAmount, parseTextLedger, reconcileTextLedger } from '@ledgerone/domain';
 import React, { useCallback, useEffect, useState } from 'react';
 import { BackHandler, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { formatAmount, newId, type TransactionRow, type TransactionType } from '@ledgerone/domain';
 import { useSyncExternalStore } from 'react';
 import { engine, scheduleSync, snapshot, startMobileAutoSync } from './src/lib/sync';
+import { runDueRecurring } from './src/lib/recurring';
 import { initDb, resetInitCache, listRecent, saveTx, topCategories, getActiveLedgerId, metaGet, metaSet, db } from './src/lib/store';
 import { resetLocalDatabase } from './src/lib/db';
 import { prepareAfterLogin, saveLocal } from '@ledgerone/sqlite-sync';
@@ -253,9 +253,223 @@ function SavingsScreen({ onBack }: { onBack: () => void }) {
 }
 
 
+/** 导入账单:粘贴手写账文本 → parseTextLedger 解析 → 全部确认入账(共享内核三路核对) */
+function ImportScreen({ onBack }: { onBack: () => void }) {
+  const [text, setText] = useState('');
+  const [parsed, setParsed] = useState<Array<{ day: number; amount: string; name: string; catId: string | null }>>([]);
+  const [summary, setSummary] = useState<string | null>(null);
+  const [warn, setWarn] = useState<string | null>(null);
+  const [done, setDone] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const total = parsed.reduce((a, p) => a + Number(p.amount), 0);
+
+  const doParse = async () => {
+    setParsed([]); setSummary(null); setWarn(null); setDone(null);
+    const r = parseTextLedger(text);
+    if (!r.ok) { setWarn(r.reason); return; }
+    const d = r.data;
+    if (d.entries.length === 0) { setWarn('未解析出任何条目,请检查文本格式'); return; }
+    await initDb();
+    const ledgerId = await getActiveLedgerId();
+    const cats = await db.getAllAsync<{ id: string; name: string }>(
+      'SELECT id, name FROM categories WHERE is_deleted = 0 AND ledger_id = ?', [ledgerId]);
+    const rec = reconcileTextLedger(d);
+    const catIdOf = (name: string): string | null => cats.find((c) => c.name === name)?.id ?? null;
+    setParsed(d.entries.map((e) => ({ ...e, catId: catIdOf(e.name) })));
+    const parts = [`${d.entries.length} 条 · 合计 ¥${formatAmount(d.entries.reduce((a, e) => a + Number(e.amount), 0).toFixed(2))}`];
+    if (rec.unresolvedDiffs.length > 0) parts.push(`⚠ 与手写合计有 ${rec.unresolvedDiffs.length} 处差异(${rec.unresolvedDiffs.map((x) => `${x.label}差${x.diff}`).join('、')})`);
+    if (d.ignoredLines > 0) parts.push(`忽略 ${d.ignoredLines} 行`);
+    setSummary(parts.join(' · '));
+  };
+
+  const confirmAll = async () => {
+    if (parsed.length === 0) return;
+    setBusy(true);
+    try {
+      await initDb();
+      const ledgerId = await getActiveLedgerId();
+      const firstAcc = (await db.getAllAsync<{ id: string }>('SELECT id FROM accounts WHERE is_deleted = 0 AND ledger_id = ? ORDER BY sort LIMIT 1', [ledgerId]))[0]?.id ?? '';
+      const year = new Date().getFullYear();
+      let n = 0;
+      for (const e of parsed) {
+        const ts = new Date(year, new Date().getMonth(), e.day, 12).getTime();
+        if (ts > Date.now()) continue; // 跳过未来日期(手写账可能写到月底)
+        const tx = { id: newId(), ledger_id: ledgerId, user_id: 'local', member_id: null, type: 'expense',
+          amount: e.amount, currency: 'CNY', amount_base: e.amount, exchange_rate: null,
+          category_id: e.catId, account_id: firstAcc, to_account_id: null,
+          happened_at: ts, note: e.name, is_refunded: 0, refund_of_id: null, reimburse_status: null,
+          exclude_from_budget: 0, attachment_count: 0, source: 'import',
+          client_version: 1, server_version: null, is_deleted: 0, deleted_at: null, created_at: Date.now(), updated_at: Date.now() };
+        await saveLocal(db, 'transaction', tx as never);
+        n++;
+      }
+      setDone(n); setParsed([]);
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <View style={{ flex: 1, backgroundColor: '#f6f7f9' }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', paddingTop: 50, paddingHorizontal: 12, paddingBottom: 8 }}>
+        <Pressable onPress={onBack}><Text style={{ fontSize: 16, color: '#4361ee' }}>‹ 返回</Text></Pressable>
+        <Text style={{ flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '700', color: '#1a1c23' }}>导入账单</Text>
+        <Text style={{ fontSize: 16, color: 'transparent' }}>‹</Text>
+      </View>
+      <ScrollView contentContainerStyle={{ padding: 12, gap: 10 }}>
+        <Text style={{ fontSize: 12, color: '#8a93a5' }}>粘贴手写账文本(首行需「2026 10月消费」;每行「日  金额品名」;合计行自动核对)</Text>
+        <TextInput
+          style={{ backgroundColor: '#fff', borderRadius: 10, padding: 10, minHeight: 140, fontSize: 12, color: '#1a1c23', textAlignVertical: 'top' }}
+          value={text} onChangeText={setText} multiline
+          placeholder={'2026 10月消费\n1  6.3  9.05砂纸  12面\n合计  267.48'}
+          placeholderTextColor="#b4bac6"
+        />
+        <Pressable style={[styles.saveBtn, busy && styles.disabled]} onPress={() => void doParse()}>
+          <Text style={styles.saveText}>解析</Text>
+        </Pressable>
+        {warn && <Text style={{ color: '#d64545', fontSize: 12 }}>{warn}</Text>}
+        {summary && <Text style={{ color: '#1a1c23', fontSize: 13 }}>{summary}</Text>}
+        {parsed.length > 0 && (
+          <View style={{ backgroundColor: '#fff', borderRadius: 10, padding: 10 }}>
+            {parsed.map((e, i) => (
+              <View key={i} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3 }}>
+                <Text style={{ fontSize: 12, color: '#1a1c23' }}>{e.day}日 · {e.name || '未命名'}{e.catId ? '' : '(未匹配分类)'}</Text>
+                <Text style={{ fontSize: 12, color: '#4a5160' }}>¥{e.amount}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+        {parsed.length > 0 && (
+          <Pressable style={[styles.saveBtn, busy && styles.disabled]} onPress={() => void confirmAll()}>
+            <Text style={styles.saveText}>{busy ? '入账中…' : `全部确认入账(${parsed.length} 条)`}</Text>
+          </Pressable>
+        )}
+        {done !== null && <Text style={{ color: '#1f9d6c', fontSize: 13 }}>已入账 {done} 笔,联网后自动同步</Text>}
+      </ScrollView>
+    </View>
+  );
+}
+
+/** 循环记账:规则列表 + 新建 + 打开时补跑到期生成(SQLite 版引擎) */
+function RecurringScreen({ onBack }: { onBack: () => void }) {
+  const [rules, setRules] = useState<Array<Record<string, unknown>>>([]);
+  const [creating, setCreating] = useState(false);
+  const [note, setNote] = useState('');
+  const [amount, setAmount] = useState('');
+  const [freq, setFreq] = useState<'daily' | 'weekly' | 'monthly'>('monthly');
+  const [catId, setCatId] = useState<string | null>(null);
+  const [cats, setCats] = useState<Array<{ id: string; name: string; icon: string }>>([]);
+  const [generated, setGenerated] = useState<number | null>(null);
+
+  const load = async () => {
+    await initDb();
+    const ledgerId = await getActiveLedgerId();
+    const rows = await db.getAllAsync<Record<string, unknown>>(
+      'SELECT * FROM recurring_rules WHERE is_deleted = 0 AND ledger_id = ? ORDER BY created_at DESC', [ledgerId]);
+    setRules(rows);
+    const cs = await db.getAllAsync<{ id: string; name: string; icon: string }>(
+      'SELECT id, name, icon FROM categories WHERE is_deleted = 0 AND ledger_id = ? ORDER BY kind, sort', [ledgerId]);
+    setCats(cs);
+    if (cs[0]) setCatId((prev) => prev ?? cs[0].id);
+    const n = await runDueRecurring();
+    if (n > 0) setGenerated(n);
+  };
+  useEffect(() => { void load(); }, []);
+
+  const create = async () => {
+    if (!isValidAmount(amount) || Number(amount) <= 0 || !catId) return;
+    const ledgerId = await getActiveLedgerId();
+    const now = Date.now();
+    const row = { id: newId(), ledger_id: ledgerId, amount: Number(amount).toFixed(2), category_id: catId,
+      account_id: (await db.getAllAsync<{ id: string }>('SELECT id FROM accounts WHERE is_deleted = 0 AND ledger_id = ? ORDER BY sort LIMIT 1', [ledgerId]))[0]?.id ?? '',
+      note: note.trim() || null, frequency: freq, interval: 1, next_run_at: now + 86_400_000,
+      paused: 0, last_run_at: null, client_version: 1, server_version: null, is_deleted: 0, deleted_at: null, created_at: now, updated_at: now };
+    await saveLocal(db, 'recurring_rule', row as never);
+    setNote(''); setAmount(''); setCreating(false);
+    await load();
+  };
+
+  const togglePause = async (row: Record<string, unknown>) => {
+    await saveLocal(db, 'recurring_rule', { ...row, paused: row.paused ? 0 : 1, client_version: Number(row.client_version ?? 0) + 1, updated_at: Date.now() } as never);
+    void load();
+  };
+
+  const removeRule = async (row: Record<string, unknown>) => {
+    const now = Date.now();
+    await saveLocal(db, 'recurring_rule', { ...row, is_deleted: 1, deleted_at: now, client_version: Number(row.client_version ?? 0) + 1, updated_at: now } as never, { op: 'delete' });
+    void load();
+  };
+
+  const FREQ_LABEL: Record<string, string> = { daily: '每天', weekly: '每周', monthly: '每月', quarterly: '每季', yearly: '每年' };
+  const catOf = (id: unknown) => cats.find((c) => c.id === id);
+
+  return (
+    <View style={{ flex: 1, backgroundColor: '#f6f7f9' }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', paddingTop: 50, paddingHorizontal: 12, paddingBottom: 8 }}>
+        <Pressable onPress={onBack}><Text style={{ fontSize: 16, color: '#4361ee' }}>‹ 返回</Text></Pressable>
+        <Text style={{ flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '700', color: '#1a1c23' }}>循环记账</Text>
+        <Pressable onPress={() => setCreating((v) => !v)}><Text style={{ fontSize: 20, color: '#4361ee' }}>＋</Text></Pressable>
+      </View>
+      {generated !== null && generated > 0 && (
+        <Text style={{ color: '#1f9d6c', fontSize: 12, paddingHorizontal: 12, paddingBottom: 6 }}>已自动补生成 {generated} 笔到期流水</Text>
+      )}
+      <ScrollView contentContainerStyle={{ padding: 12, gap: 10 }}>
+        {creating && (
+          <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 14, gap: 8 }}>
+            <TextInput style={styles.input} value={note} onChangeText={(t) => setNote(t.slice(0, 50))} placeholder="名称(如 房租)" placeholderTextColor="#b4bac6" />
+            <TextInput style={styles.input} value={amount} onChangeText={(t) => setAmount(t.replace(/[^\\d.]/g, ''))} keyboardType="decimal-pad" placeholder="金额" placeholderTextColor="#b4bac6" />
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              {(['daily', 'weekly', 'monthly'] as const).map((f) => (
+                <Pressable key={f} onPress={() => setFreq(f)}
+                  style={{ flex: 1, paddingVertical: 8, borderRadius: 10, alignItems: 'center', backgroundColor: freq === f ? '#4361ee' : '#eef0f6' }}>
+                  <Text style={{ fontSize: 13, color: freq === f ? '#fff' : '#4a5160' }}>{FREQ_LABEL[f]}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+              {cats.map((c) => (
+                <Pressable key={c.id} onPress={() => setCatId(c.id)}
+                  style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 12, backgroundColor: catId === c.id ? '#4361ee' : '#eef0f6' }}>
+                  <Text style={{ fontSize: 12, color: catId === c.id ? '#fff' : '#4a5160' }}>{c.icon} {c.name}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <Pressable style={[styles.saveBtn, (!amount || !catId) && styles.disabled]} onPress={() => void create()}>
+              <Text style={styles.saveText}>创建规则(明天开始生效)</Text>
+            </Pressable>
+          </View>
+        )}
+        {rules.map((row) => {
+          const next = new Date(Number(row.next_run_at)).toLocaleDateString('zh-CN');
+          const c = catOf(row.category_id);
+          return (
+            <View key={String(row.id)} style={{ backgroundColor: '#fff', borderRadius: 12, padding: 14 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Text style={{ fontSize: 14, fontWeight: '700', color: '#1a1c23' }}>{String(row.note || (c ? `${c.icon} ${c.name}` : '周期记账'))}</Text>
+                <Text style={{ fontSize: 11, color: row.paused ? '#8a93a5' : '#1f9d6c' }}>{Number(row.paused) ? '已暂停' : '进行中'}</Text>
+              </View>
+              <Text style={{ fontSize: 12, color: '#4a5160', marginVertical: 4 }}>
+                ¥{formatAmount(String(row.amount))} · {FREQ_LABEL[String(row.frequency)] ?? String(row.frequency)} · 下次 {next}
+              </Text>
+              <View style={{ flexDirection: 'row', gap: 14, marginTop: 6 }}>
+                <Pressable onPress={() => void togglePause(row)}>
+                  <Text style={{ fontSize: 12, color: '#4361ee' }}>{row.paused ? '继续' : '暂停'}</Text>
+                </Pressable>
+                <Pressable onPress={() => void removeRule(row)}>
+                  <Text style={{ fontSize: 12, color: '#d64545' }}>删除</Text>
+                </Pressable>
+              </View>
+            </View>
+          );
+        })}
+        {rules.length === 0 && !creating && <Text style={{ color: '#8a93a5', fontSize: 13, textAlign: 'center' }}>还没有循环规则,点右上角 ＋ 创建</Text>}
+      </ScrollView>
+    </View>
+  );
+}
+
+
 function AppInner() {
   const insets = useSafeAreaInsets();
-  const [sub, setSub] = useState<'none' | 'cats' | 'savings'>('none');
+  const [sub, setSub] = useState<'none' | 'cats' | 'savings' | 'import' | 'recurring'>('none');
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState<Tab>('record');
   const [txs, setTxs] = useState<TransactionRow[]>([]);
@@ -326,6 +540,8 @@ function AppInner() {
 
   if (sub === 'cats') return <CategoryManager onBack={() => setSub('none')} />;
   if (sub === 'savings') return <SavingsScreen onBack={() => setSub('none')} />;
+  if (sub === 'import') return <ImportScreen onBack={() => setSub('none')} />;
+  if (sub === 'recurring') return <RecurringScreen onBack={() => setSub('none')} />;
   return (
     <View style={[styles.app, { paddingTop: insets.top }]}>
       <Text style={styles.title}>帽子记账本</Text>
@@ -860,7 +1076,7 @@ function ReportScreen() {
   );
 }
 
-function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onLogged: (v: boolean) => void; syncText: string; onOpen: (p: 'cats' | 'savings') => void }) {
+function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onLogged: (v: boolean) => void; syncText: string; onOpen: (p: 'cats' | 'savings' | 'import' | 'recurring') => void }) {
   const [server, setServer] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -961,10 +1177,10 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
         </Pressable>
       </View>
       <View style={{ flexDirection: 'row', gap: 8 }}>
-        <Pressable style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center', opacity: 0.5 }} onPress={() => setMsg('导入账单即将上线')}>
+        <Pressable style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('import')}>
           <Text style={{ fontSize: 13, color: '#1a1c23' }}>📥 导入账单</Text>
         </Pressable>
-        <Pressable style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center', opacity: 0.5 }} onPress={() => setMsg('循环记账即将上线')}>
+        <Pressable style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('recurring')}>
           <Text style={{ fontSize: 13, color: '#1a1c23' }}>🔁 循环记账</Text>
         </Pressable>
       </View>
