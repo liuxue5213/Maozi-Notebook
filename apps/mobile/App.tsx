@@ -1031,6 +1031,13 @@ function ListScreen() {
   const [editAmount, setEditAmount] = useState('');
   const [editNote, setEditNote] = useState('');
   const [accounts, setAccounts] = useState<Array<{ id: string; name: string }>>([]);
+  const [view, setView] = useState<'active' | 'recycled'>('active');
+  const [minAmt, setMinAmt] = useState('');
+  const [maxAmt, setMaxAmt] = useState('');
+  const [accFilter, setAccFilter] = useState('all');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [showAdv, setShowAdv] = useState(false);
   const mr = monthRange(monthOffset);
 
   const load = async (off: number, replace: boolean) => {
@@ -1040,10 +1047,17 @@ function ListScreen() {
       const ledgerId = await getActiveLedgerId();
       if (!ledgerId) return;
       void db.getAllAsync<{ id: string; name: string }>('SELECT id, name FROM accounts WHERE is_deleted = 0 AND ledger_id = ? ORDER BY sort', [ledgerId]).then(setAccounts);
-      const clauses = ['t.is_deleted = 0', 't.ledger_id = ?', 't.happened_at >= ?', 't.happened_at < ?'];
-      const params: Array<string | number> = [ledgerId, mr.start, mr.end];
+      const recycled = view === 'recycled';
+      const clauses = [recycled ? 't.is_deleted = 1' : 't.is_deleted = 0', 't.ledger_id = ?'];
+      const params: Array<string | number> = [ledgerId];
+      if (!recycled) { clauses.push('t.happened_at >= ?', 't.happened_at < ?'); params.push(mr.start, mr.end); }
       if (typeFilter !== 'all') { clauses.push('t.type = ?'); params.push(typeFilter); }
       if (kw.trim()) { clauses.push('(t.note LIKE ? OR c.name LIKE ?)'); params.push(`%${kw.trim()}%`, `%${kw.trim()}%`); }
+      if (minAmt) { clauses.push('CAST(t.amount AS REAL) >= ?'); params.push(Number(minAmt)); }
+      if (maxAmt) { clauses.push('CAST(t.amount AS REAL) <= ?'); params.push(Number(maxAmt)); }
+      if (accFilter !== 'all') { clauses.push('(t.account_id = ? OR t.to_account_id = ?)'); params.push(accFilter, accFilter); }
+      if (dateFrom) { clauses.push('t.happened_at >= ?'); params.push(new Date(dateFrom).getTime()); }
+      if (dateTo) { clauses.push('t.happened_at < ?'); params.push(new Date(dateTo).getTime() + 86_399_000); }
       const where = clauses.join(' AND ');
       const got = await db.getAllAsync<TransactionRow & { cat_name?: string; cat_icon?: string }>(
         `SELECT t.*, c.name AS cat_name, c.icon AS cat_icon FROM transactions t
@@ -1053,12 +1067,14 @@ function ListScreen() {
       );
       setRows((prev) => (replace ? got : [...prev, ...got]));
       setHasMore(got.length === PAGE);
-      const sums = await db.getAllAsync<{ type: string; s: number }>(
-        `SELECT type, SUM(CAST(amount AS REAL)) AS s FROM transactions t WHERE ${where} GROUP BY type`, params);
-      setMonthSum({
-        income: Number(sums.find((r) => r.type === 'income')?.s ?? 0),
-        expense: Number(sums.find((r) => r.type === 'expense')?.s ?? 0),
-      });
+      if (!recycled) {
+        const sums = await db.getAllAsync<{ type: string; s: number }>(
+          `SELECT type, SUM(CAST(amount AS REAL)) AS s FROM transactions t WHERE ${where} GROUP BY type`, params);
+        setMonthSum({
+          income: Number(sums.find((r) => r.type === 'income')?.s ?? 0),
+          expense: Number(sums.find((r) => r.type === 'expense')?.s ?? 0),
+        });
+      }
     } finally {
       setBusy(false);
     }
@@ -1075,6 +1091,39 @@ function ListScreen() {
           ? <Pressable onPress={() => setMonthOffset((m) => Math.max(0, m - 1))}><Text style={{ fontSize: 18, color: '#4a5160' }}>›</Text></Pressable>
           : <Text style={{ fontSize: 18, color: 'transparent' }}>›</Text>}
       </View>
+      <View style={{ flexDirection: 'row', paddingHorizontal: 12, paddingTop: 8, gap: 8 }}>
+        {(['active', 'recycled'] as const).map((v) => (
+          <Pressable key={v} onPress={() => setView(v)}
+            style={{ paddingVertical: 4, paddingHorizontal: 10, borderRadius: 12, backgroundColor: view === v ? '#1a1c23' : '#eef0f6' }}>
+            <Text style={{ fontSize: 12, color: view === v ? '#fff' : '#4a5160' }}>{v === 'active' ? '流水' : '🗑 回收站'}</Text>
+          </Pressable>
+        ))}
+        <Pressable onPress={() => setShowAdv((v) => !v)} style={{ paddingVertical: 4, paddingHorizontal: 10, borderRadius: 12, backgroundColor: '#eef0f6' }}>
+          <Text style={{ fontSize: 12, color: '#4a5160' }}>筛选 ▾</Text>
+        </Pressable>
+      </View>
+      {showAdv && (
+        <View style={{ paddingHorizontal: 12, paddingVertical: 6, gap: 6, backgroundColor: '#fff', borderRadius: 10, marginHorizontal: 12 }}>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <TextInput style={{ ...styles.input, flex: 1, minHeight: 36 }} value={minAmt} onChangeText={setMinAmt} keyboardType="decimal-pad" placeholder="金额≥" placeholderTextColor="#b4bac6" />
+            <TextInput style={{ ...styles.input, flex: 1, minHeight: 36 }} value={maxAmt} onChangeText={setMaxAmt} keyboardType="decimal-pad" placeholder="金额≤" placeholderTextColor="#b4bac6" />
+          </View>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+            <Pressable onPress={() => setAccFilter('all')} style={{ paddingVertical: 4, paddingHorizontal: 10, borderRadius: 10, backgroundColor: accFilter === 'all' ? '#4361ee' : '#eef0f6' }}>
+              <Text style={{ fontSize: 11, color: accFilter === 'all' ? '#fff' : '#4a5160' }}>全部账户</Text>
+            </Pressable>
+            {accounts.map((a) => (
+              <Pressable key={a.id} onPress={() => setAccFilter(a.id)} style={{ paddingVertical: 4, paddingHorizontal: 10, borderRadius: 10, backgroundColor: accFilter === a.id ? '#4361ee' : '#eef0f6' }}>
+                <Text style={{ fontSize: 11, color: accFilter === a.id ? '#fff' : '#4a5160' }}>{a.name}</Text>
+              </Pressable>
+            ))}
+          </View>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <TextInput style={{ ...styles.input, flex: 1, minHeight: 36 }} value={dateFrom} onChangeText={setDateFrom} placeholder="开始日期 2026-10-01" placeholderTextColor="#b4bac6" />
+            <TextInput style={{ ...styles.input, flex: 1, minHeight: 36 }} value={dateTo} onChangeText={setDateTo} placeholder="结束日期 2026-10-31" placeholderTextColor="#b4bac6" />
+          </View>
+        </View>
+      )}
       <View style={{ flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 6, gap: 8 }}>
         {(['all', 'expense', 'income'] as const).map((t) => (
           <Pressable key={t} onPress={() => setTypeFilter(t)}
@@ -1099,9 +1148,15 @@ function ListScreen() {
               <Text style={styles.txNote}>{t.note || t.cat_name || (t.type === 'income' ? '收入' : t.type === 'transfer' ? '转账' : '支出')}{t.type === 'transfer' ? ' → ' + (accounts.find((a) => a.id === t.to_account_id)?.name ?? '') : ''}</Text>
               <Text style={styles.txDate}>{new Date(t.happened_at).toLocaleString('zh-CN')}{t.cat_name ? ` · ${t.cat_name}` : ''}</Text>
             </View>
+            {view === 'recycled' ? (
+              <Pressable onPress={() => { void (async () => { await saveLocal(db, 'transaction', { ...t, is_deleted: false, deleted_at: null, client_version: Number(t.client_version ?? 0) + 1, updated_at: Date.now() } as never); setOffset(0); void load(0, true); scheduleSync(); })(); }}>
+                <Text style={{ color: '#1f9d6c', fontSize: 13 }}>恢复</Text>
+              </Pressable>
+            ) : (
             <Text style={[styles.txAmount, { color: t.type === 'income' ? '#1f9d6c' : '#1a1c23' }]}>
               {t.type === 'income' ? '+' : '-'}¥{formatAmount(String(t.amount))}
             </Text>
+            )}
           </Pressable>
         ))}
         {rows.length === 0 && !busy && <Text style={styles.muted}>本月暂无流水</Text>}
