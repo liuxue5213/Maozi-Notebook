@@ -2,12 +2,13 @@ import './src/lib/polyfills'; // 必须最先:uuid@14 裸用全局 crypto,Hermes
 import { buildBudgetModel, netSavings, type BudgetModel } from '@ledgerone/ledger-core';
 import { isValidAmount, parseTextLedger, reconcileTextLedger, renderTextLedger, billingCycleRange, daysUntilDue } from '@ledgerone/domain';
 import React, { useCallback, useEffect, useState } from 'react';
-import { BackHandler, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { AppState, BackHandler, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { formatAmount, newId, type TransactionRow, type TransactionType } from '@ledgerone/domain';
 import { useSyncExternalStore } from 'react';
 import { engine, scheduleSync, snapshot, startMobileAutoSync } from './src/lib/sync';
 import { runDueRecurring } from './src/lib/recurring';
+import { isLockEnabled, enableLock, disableLock, biometricAuth, biometricAvailable, setPin, verifyPin, hasPin } from './src/lib/applock';
 import { initDb, resetInitCache, createLedgerWithSeed, listRecent, saveTx, topCategories, getActiveLedgerId, metaGet, metaSet, db } from './src/lib/store';
 import { resetLocalDatabase } from './src/lib/db';
 import { prepareAfterLogin, saveLocal } from '@ledgerone/sqlite-sync';
@@ -466,6 +467,70 @@ function RecurringScreen({ onBack }: { onBack: () => void }) {
   );
 }
 
+
+function LockGate({ children }: { children: React.ReactNode }) {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [locked, setLocked] = useState(false);
+  const [mode, setMode] = useState<'bio' | 'pin'>('pin');
+  const [pin, setPin] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [pinFallback, setPinFallback] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      const on = await isLockEnabled();
+      setEnabled(on);
+      if (on) {
+        const bio = await biometricAvailable();
+        setMode(bio ? 'bio' : 'pin');
+        setPinFallback(await hasPin());
+        setLocked(true);
+        if (bio) void biometricAuth().then((ok) => { if (ok) setLocked(false); });
+      }
+    })();
+    const sub = AppState.addEventListener('change', (st) => {
+      if (st === 'background') void isLockEnabled().then((on) => { if (on) setLocked(true); });
+    });
+    return () => sub.remove();
+  }, []);
+
+  const tryBio = async () => {
+    const ok = await biometricAuth();
+    if (ok) setLocked(false);
+  };
+
+  const tryPin = async () => {
+    const r = await verifyPin(pin);
+    if (r === 'ok') { setLocked(false); setPin(''); setErr(null); }
+    else if (r === 'locked') setErr('失败次数过多,请 60 秒后再试');
+    else { setErr('PIN 错误'); setPin(''); }
+  };
+
+  if (enabled === null || !locked) return <>{children}</>;
+  return (
+    <View style={{ flex: 1, backgroundColor: '#f6f7f9', justifyContent: 'center', alignItems: 'center', padding: 30 }}>
+      <Text style={{ fontSize: 17, fontWeight: '700', color: '#1a1c23', marginBottom: 6 }}>帽子记账本已锁定</Text>
+      <Text style={{ fontSize: 12, color: '#8a93a5', marginBottom: 20 }}>{mode === 'bio' ? '使用面容/指纹解锁' : '输入 PIN 解锁'}</Text>
+      {mode === 'bio' && (
+        <Pressable style={{ backgroundColor: '#4361ee', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 30, marginBottom: 12 }} onPress={() => void tryBio()}>
+          <Text style={{ color: '#fff', fontSize: 15 }}>🔓 解锁</Text>
+        </Pressable>
+      )}
+      {mode === 'pin' && (
+        <View style={{ width: '100%', gap: 10 }}>
+          <TextInput style={styles.input} value={pin} onChangeText={(t) => setPin(t.replace(/[^\d]/g, '').slice(0, 8))} keyboardType="number-pad" secureTextEntry placeholder="输入 PIN" placeholderTextColor="#b4bac6" onSubmitEditing={() => void tryPin()} />
+          <Pressable style={styles.saveBtn} onPress={() => void tryPin()}>
+            <Text style={styles.saveText}>解锁</Text>
+          </Pressable>
+        </View>
+      )}
+      {mode === 'bio' && pinFallback && (
+        <Pressable onPress={() => setMode('pin')}><Text style={{ fontSize: 13, color: '#4361ee' }}>使用 PIN 解锁</Text></Pressable>
+      )}
+      {err && <Text style={{ color: '#d64545', fontSize: 12, marginTop: 10 }}>{err}</Text>}
+    </View>
+  );
+}
 
 function AppInner() {
   const insets = useSafeAreaInsets();
@@ -1424,6 +1489,21 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
           <Text style={{ fontSize: 13, color: '#1a1c23' }}>📄 手写账导出</Text>
         </Pressable>
       </View>
+      <Pressable style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12 }}
+        onPress={() => {
+          void (async () => {
+            if (await isLockEnabled()) { await disableLock(); setMsg('应用锁已关闭'); }
+            else {
+              const kind = await enableLock();
+              if (kind === 'biometric') setMsg('应用锁已开启(面容/指纹)');
+              else { await setPin('1234'); setMsg('应用锁已开启,初始 PIN 1234——请在安全设置中修改'); }
+            }
+            setTimeout(() => setMsg(null), 2500);
+          })();
+        }}>
+        <Text style={{ fontSize: 13, color: '#1a1c23' }}>🔒 应用锁(生物识别 / PIN)</Text>
+        <Text style={{ fontSize: 12, color: '#8a93a5' }}>点按开启/关闭</Text>
+      </Pressable>
       {!logged && (
         <>
           <Text style={styles.label}>服务器</Text>
@@ -1509,7 +1589,9 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <ErrorBoundary>
-        <AppInner />
+        <LockGate>
+          <AppInner />
+        </LockGate>
       </ErrorBoundary>
     </SafeAreaProvider>
   );
