@@ -121,6 +121,11 @@ export const authApi = {
   register: (email: string, password: string) => auth.register(email, password),
   logoutRemote: auth.logoutRemote,
   me: auth.me as () => Promise<Record<string, unknown>>,
+  updateMe: (body: { nickname?: string; base_currency?: string }) =>
+    apiFetch('/v1/users/me', { method: 'PATCH', body: JSON.stringify(body) }) as unknown as Promise<Record<string, unknown>>,
+  deleteMe: async (password: string) => {
+    await apiFetch('/v1/users/me', { method: 'DELETE', body: JSON.stringify({ password }) });
+  },
 };
 
 export async function isLoggedIn(): Promise<boolean> {

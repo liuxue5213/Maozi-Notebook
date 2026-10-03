@@ -10,6 +10,7 @@ import { engine, scheduleSync, snapshot, startMobileAutoSync } from './src/lib/s
 import { runDueRecurring } from './src/lib/recurring';
 import { isLockEnabled, enableLock, disableLock, biometricAuth, biometricAvailable, setPin, verifyPin, hasPin } from './src/lib/applock';
 import { initDb, resetInitCache, createLedgerWithSeed, listRecent, saveTx, topCategories, getActiveLedgerId, metaGet, metaSet, db } from './src/lib/store';
+import { clearSession as clearSessionLocal } from './src/lib/api';
 import { resetLocalDatabase } from './src/lib/db';
 import { prepareAfterLogin, saveLocal } from '@ledgerone/sqlite-sync';
 import { authApi, clearSession, getServerUrl, isLoggedIn, logout as logoutAll, saveSession, setServerUrl, SERVER_PRESETS, resolveServerUrl } from './src/lib/api';
@@ -536,7 +537,7 @@ function LockGate({ children }: { children: React.ReactNode }) {
 
 function AppInner() {
   const insets = useSafeAreaInsets();
-  const [sub, setSub] = useState<'none' | 'cats' | 'savings' | 'import' | 'recurring' | 'ledgers' | 'export' | 'accounts'>('none');
+  const [sub, setSub] = useState<'none' | 'cats' | 'savings' | 'import' | 'recurring' | 'ledgers' | 'export' | 'accounts' | 'settings'>('none');
   const [ledgerEpoch, setLedgerEpoch] = useState(0);
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState<Tab>('record');
@@ -613,6 +614,7 @@ function AppInner() {
   if (sub === 'ledgers') return <LedgerManager onBack={() => { setSub('none'); setLedgerEpoch((e) => e + 1); }} />;
   if (sub === 'export') return <ExportLedger onBack={() => setSub('none')} />;
   if (sub === 'accounts') return <AccountsScreen onBack={() => { setSub('none'); setLedgerEpoch((e) => e + 1); }} />;
+  if (sub === 'settings') return <AccountSettings onBack={() => setSub('none')} onLogged={() => { setSub('none'); setLogged(false); setLedgerEpoch((e) => e + 1); }} />;
   return (
     <View style={[styles.app, { paddingTop: insets.top }]}>
       <Text style={styles.title}>帽子记账本</Text>
@@ -1603,7 +1605,97 @@ function AccountsScreen({ onBack }: { onBack: () => void }) {
 }
 
 
-function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onLogged: (v: boolean) => void; syncText: string; onOpen: (p: 'cats' | 'savings' | 'import' | 'recurring' | 'ledgers' | 'export' | 'accounts') => void }) {
+/** 账号设置(T-17):昵称 / 主币种 / 注销账号(密码二次确认 + 本地清库) */
+function AccountSettings({ onBack, onLogged }: { onBack: () => void; onLogged: () => void }) {
+  const [nickname, setNickname] = useState('');
+  const [currency, setCurrency] = useState('CNY');
+  const [delPwd, setDelPwd] = useState('');
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const u = (await authApi.me()) as { nickname?: string; base_currency?: string };
+        setNickname(u.nickname ?? '');
+        setCurrency(u.base_currency ?? 'CNY');
+      } catch { /* 静默 */ }
+    })();
+  }, []);
+
+  const saveProfile = async () => {
+    setBusy(true);
+    try {
+      await authApi.updateMe({ nickname: nickname.trim().slice(0, 30), base_currency: currency });
+      await metaSet(db, 'base_currency', currency);
+      setMsg('已保存');
+      setTimeout(() => setMsg(null), 1500);
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(false); }
+  };
+
+  const deleteAccount = async () => {
+    if (!isValidAmount('1')) return; // noop guard
+    setBusy(true);
+    try {
+      // 注销:服务端二次校验密码;成功后本地清库回未登录态
+      await authApi.deleteMe(delPwd);
+      await resetLocalDatabase();
+      resetInitCache();
+      await clearSession();
+      onLogged();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <View style={{ flex: 1, backgroundColor: '#f6f7f9' }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', paddingTop: 50, paddingHorizontal: 12, paddingBottom: 8 }}>
+        <Pressable onPress={onBack}><Text style={{ fontSize: 16, color: '#4361ee' }}>‹ 返回</Text></Pressable>
+        <Text style={{ flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '700', color: '#1a1c23' }}>账号设置</Text>
+        <Text style={{ fontSize: 16, color: 'transparent' }}>‹</Text>
+      </View>
+      <ScrollView contentContainerStyle={{ padding: 12, gap: 10 }}>
+        <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 14, gap: 10 }}>
+          <Text style={{ fontSize: 13, fontWeight: '700', color: '#1a1c23' }}>个人资料</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Text style={{ fontSize: 12, color: '#4a5160', width: 60 }}>昵称</Text>
+            <TextInput style={{ ...styles.input, flex: 1 }} value={nickname} onChangeText={(t) => setNickname(t.slice(0, 30))} placeholder="昵称" placeholderTextColor="#b4bac6" />
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Text style={{ fontSize: 12, color: '#4a5160', width: 60 }}>主币种</Text>
+            <View style={{ flexDirection: 'row', gap: 6 }}>
+              {(['CNY', 'USD', 'EUR', 'JPY'] as const).map((c) => (
+                <Pressable key={c} onPress={() => setCurrency(c)}
+                  style={{ paddingVertical: 6, paddingHorizontal: 12, borderRadius: 10, backgroundColor: currency === c ? '#4361ee' : '#eef0f6' }}>
+                  <Text style={{ fontSize: 12, color: currency === c ? '#fff' : '#4a5160' }}>{c}</Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+          <Pressable style={[styles.saveBtn, busy && styles.disabled]} onPress={() => void saveProfile()}>
+            <Text style={styles.saveText}>保存</Text>
+          </Pressable>
+        </View>
+        <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 14, gap: 10 }}>
+          <Text style={{ fontSize: 13, fontWeight: '700', color: '#d64545' }}>危险区 · 注销账号</Text>
+          <Text style={{ fontSize: 11, color: '#8a93a5' }}>将删除服务器账号与云端数据,并清空本机全部记录,不可恢复</Text>
+          <TextInput style={styles.input} value={delPwd} onChangeText={setDelPwd} secureTextEntry placeholder="输入密码确认" placeholderTextColor="#b4bac6" />
+          <Pressable style={{ ...styles.saveBtn, backgroundColor: '#d64545', ...(!delPwd && styles.disabled) }} onPress={() => void deleteAccount()}>
+            <Text style={styles.saveText}>注销账号</Text>
+          </Pressable>
+        </View>
+        {msg && <Text style={{ fontSize: 12, color: msg.includes('失败') || msg.includes('错误') ? '#d64545' : '#1f9d6c' }}>{msg}</Text>}
+      </ScrollView>
+    </View>
+  );
+}
+
+
+function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onLogged: (v: boolean) => void; syncText: string; onOpen: (p: 'cats' | 'savings' | 'import' | 'recurring' | 'ledgers' | 'export' | 'accounts' | 'settings') => void }) {
   const [server, setServer] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -1728,6 +1820,9 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
           <Text style={{ fontSize: 13, color: '#1a1c23' }}>📚 账本管理</Text>
         </Pressable>
       </View>
+      <Pressable style={{ backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('settings')}>
+        <Text style={{ fontSize: 13, color: '#1a1c23' }}>⚙️ 账号设置</Text>
+      </Pressable>
       <Pressable style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12 }}
         onPress={() => {
           void (async () => {
