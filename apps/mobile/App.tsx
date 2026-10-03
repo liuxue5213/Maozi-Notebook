@@ -825,18 +825,18 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
       onLogged(true);
       await initDb(); // 清库后重播种/重初始化
       await engine.syncOnce();
-      // 首登收敛:若当前 active 账本是本地新建(从未上云),而服务器已有同步过的账本,
-      // 则采纳服务器的账本作为当前账本——否则两端同账号却各看各的空账本
+      // 首登收敛:登录同步完成后,当前账本一律对齐到该账号「最早创建的已同步账本」
+      // (与 Web 端默认口径一致)。否则手机本地 seed 的新账本一旦 push 上云就永远不会切换,
+      // 造成同账号两端各看各的空账本。
       const active = await getActiveLedgerId();
-      const activeSynced = await db.getAllAsync<{ n: number }>(
-        'SELECT COUNT(*) AS n FROM ledgers WHERE id = ? AND server_version IS NOT NULL', [active]);
-      if (!Number(activeSynced[0]?.n)) {
-        const srvLedger = await db.getAllAsync<{ id: string }>(
-          'SELECT id FROM ledgers WHERE server_version IS NOT NULL AND is_deleted = 0 ORDER BY created_at LIMIT 1');
-        if (srvLedger[0]?.id && srvLedger[0].id !== active) {
-          await metaSet(db, 'active_ledger', srvLedger[0].id);
-          console.log('[auth] 采纳服务器账本:', srvLedger[0].id);
-        }
+      const earliest = await db.getAllAsync<{ id: string; created_at: number }>(
+        'SELECT id, created_at FROM ledgers WHERE server_version IS NOT NULL AND is_deleted = 0 ORDER BY created_at ASC LIMIT 1');
+      const earliestRow = await db.getAllAsync<{ created_at: number }>(
+        'SELECT created_at FROM ledgers WHERE id = ?', [active]);
+      if (earliest[0]?.id && earliest[0].id !== active
+          && (!earliestRow[0] || earliest[0].created_at < Number(earliestRow[0].created_at))) {
+        await metaSet(db, 'active_ledger', earliest[0].id);
+        console.log('[auth] 账本对齐到最早服务器账本:', earliest[0].id);
       }
       setMsg(action === 'wiped' ? '检测到账号切换,已清空本地数据并重新同步' : '登录成功,同步已开启');
     } catch (e) {

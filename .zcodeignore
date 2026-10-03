@@ -1,0 +1,65 @@
+node_modules/
+dist/
+dist-cjs/
+.turbo/
+.env
+*.local
+*.log
+apps/server/data/
+# 旧 PGlite 本地库与测试残留仅作数据迁移备份,勿入库
+apps/server/memorydb*/
+apps/server/*.db/
+apps/server/*.sqlite*
+.DS_Store
+logs/
+output/
+.workbuddy/
+deliverables/
+
+# Playwright E2E 产物及旧数据库目录
+e2e-data/
+test-results/
+playwright-report/
+
+# Playwright 共享登录态
+**/e2e/.auth/
+
+# 图标生成器的一次性产物:构建时 expo prebuild 会从 assets/*.png 重新生成,仓库只留 source
+apps/mobile/assets/app-icon/android/
+apps/mobile/assets/app-icon/ios/
+apps/mobile/assets/app-icon/preview.html
+
+# expo prebuild 生成物:CI 每次重新生成,勿入库
+apps/mobile/android/
+
+# expo 本地缓存
+apps/mobile/.expo/
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+__pycache__/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）
