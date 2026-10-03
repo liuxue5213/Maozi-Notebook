@@ -355,7 +355,8 @@ function RecurringScreen({ onBack }: { onBack: () => void }) {
   const [creating, setCreating] = useState(false);
   const [note, setNote] = useState('');
   const [amount, setAmount] = useState('');
-  const [freq, setFreq] = useState<'daily' | 'weekly' | 'monthly'>('monthly');
+  const [freq, setFreq] = useState<'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly'>('monthly');
+  const [interval, setIntervalN] = useState('1');
   const [catId, setCatId] = useState<string | null>(null);
   const [cats, setCats] = useState<Array<{ id: string; name: string; icon: string }>>([]);
   const [generated, setGenerated] = useState<number | null>(null);
@@ -381,7 +382,7 @@ function RecurringScreen({ onBack }: { onBack: () => void }) {
     const now = Date.now();
     const row = { id: newId(), ledger_id: ledgerId, amount: Number(amount).toFixed(2), category_id: catId,
       account_id: (await db.getAllAsync<{ id: string }>('SELECT id FROM accounts WHERE is_deleted = 0 AND ledger_id = ? ORDER BY sort LIMIT 1', [ledgerId]))[0]?.id ?? '',
-      note: note.trim() || null, frequency: freq, interval: 1, next_run_at: now + 86_400_000,
+      note: note.trim() || null, frequency: freq, interval: Math.max(1, Number(interval) || 1), next_run_at: now + 86_400_000,
       paused: 0, last_run_at: null, client_version: 1, server_version: null, is_deleted: 0, deleted_at: null, created_at: now, updated_at: now };
     await saveLocal(db, 'recurring_rule', row as never);
     setNote(''); setAmount(''); setCreating(false);
@@ -418,7 +419,7 @@ function RecurringScreen({ onBack }: { onBack: () => void }) {
             <TextInput style={styles.input} value={note} onChangeText={(t) => setNote(t.slice(0, 50))} placeholder="名称(如 房租)" placeholderTextColor="#b4bac6" />
             <TextInput style={styles.input} value={amount} onChangeText={(t) => setAmount(t.replace(/[^\\d.]/g, ''))} keyboardType="decimal-pad" placeholder="金额" placeholderTextColor="#b4bac6" />
             <View style={{ flexDirection: 'row', gap: 8 }}>
-              {(['daily', 'weekly', 'monthly'] as const).map((f) => (
+              {(['daily', 'weekly', 'monthly', 'quarterly', 'yearly'] as const).map((f) => (
                 <Pressable key={f} onPress={() => setFreq(f)}
                   style={{ flex: 1, paddingVertical: 8, borderRadius: 10, alignItems: 'center', backgroundColor: freq === f ? '#4361ee' : '#eef0f6' }}>
                   <Text style={{ fontSize: 13, color: freq === f ? '#fff' : '#4a5160' }}>{FREQ_LABEL[f]}</Text>
@@ -433,6 +434,7 @@ function RecurringScreen({ onBack }: { onBack: () => void }) {
                 </Pressable>
               ))}
             </View>
+            <TextInput style={styles.input} value={interval} onChangeText={(t) => setIntervalN(t.replace(/[^\d]/g, '').slice(0, 3))} keyboardType="number-pad" placeholder="间隔(默认 1)" placeholderTextColor="#b4bac6" />
             <Pressable style={[styles.saveBtn, (!amount || !catId) && styles.disabled]} onPress={() => void create()}>
               <Text style={styles.saveText}>创建规则(明天开始生效)</Text>
             </Pressable>
@@ -685,6 +687,7 @@ function BudgetCard() {
   const [amount, setAmount] = useState('');
   const [catDrafts, setCatDrafts] = useState<Record<string, string>>({});
   const [msg, setMsg] = useState<string | null>(null);
+  const [rollover, setRollover] = useState(false);
 
   const loadModel = async () => {
     await initDb();
@@ -712,6 +715,7 @@ function BudgetCard() {
   const openEdit = () => {
     const b = model?.budget;
     setAmount(b?.total_amount ?? '');
+    setRollover(!!(b as unknown as Record<string, unknown> | undefined)?.rollover);
     setCatDrafts(Object.fromEntries((model?.items ?? []).map((i: unknown) => {
       const rec = i as unknown as Record<string, unknown>;
       return [String(rec.category_id), String(rec.amount)];
@@ -726,8 +730,8 @@ function BudgetCard() {
     const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
     const b = model?.budget;
     const row = b
-      ? { ...b, total_amount: amount, client_version: Number((b as unknown as Record<string, unknown>).client_version ?? 0) + 1, updated_at: now }
-      : { id: newId(), ledger_id: ledgerId, period_type: 'monthly', period_start: monthStart, total_amount: amount, currency: 'CNY', rollover: false, client_version: 1, server_version: null, is_deleted: false, deleted_at: null, created_at: now, updated_at: now };
+      ? { ...b, total_amount: amount, rollover, client_version: Number((b as unknown as Record<string, unknown>).client_version ?? 0) + 1, updated_at: now }
+      : { id: newId(), ledger_id: ledgerId, period_type: 'monthly', period_start: monthStart, total_amount: amount, currency: 'CNY', rollover, client_version: 1, server_version: null, is_deleted: false, deleted_at: null, created_at: now, updated_at: now };
     await saveLocal(db, 'budget', row as never);
     for (const item of model?.items ?? []) {
       const rec = item as unknown as Record<string, unknown>;
@@ -778,6 +782,12 @@ function BudgetCard() {
       {editing && (
         <View style={{ marginTop: 10, gap: 8 }}>
           <TextInput style={styles.input} value={amount} onChangeText={(t) => setAmount(t.replace(/[^\d.]/g, ''))} keyboardType="decimal-pad" placeholder="月度总预算" placeholderTextColor="#b4bac6" />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Pressable onPress={() => setRollover((v) => !v)} style={{ width: 20, height: 20, borderRadius: 4, backgroundColor: rollover ? '#4361ee' : '#eef0f6', alignItems: 'center', justifyContent: 'center' }}>
+              {rollover ? <Text style={{ color: '#fff', fontSize: 12 }}>✓</Text> : null}
+            </Pressable>
+            <Text style={{ fontSize: 12, color: '#4a5160' }}>结转上月剩余(超支不倒扣)</Text>
+          </View>
           {(model?.items ?? []).map((it: unknown) => {
             const rec = it as unknown as Record<string, unknown>;
             const cid = String(rec.category_id);
