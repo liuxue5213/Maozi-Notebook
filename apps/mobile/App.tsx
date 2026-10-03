@@ -8,6 +8,7 @@ import { formatAmount, newId, type TransactionRow, type TransactionType } from '
 import { useSyncExternalStore } from 'react';
 import { engine, scheduleSync, snapshot, startMobileAutoSync } from './src/lib/sync';
 import { runDueRecurring } from './src/lib/recurring';
+import { evalExpr } from './src/lib/calc';
 import { isLockEnabled, enableLock, disableLock, biometricAuth, biometricAvailable, setPin, verifyPin, hasPin } from './src/lib/applock';
 import { initDb, resetInitCache, createLedgerWithSeed, listRecent, saveTx, topCategories, getActiveLedgerId, metaGet, metaSet, db } from './src/lib/store';
 import { clearSession as clearSessionLocal } from './src/lib/api';
@@ -601,8 +602,9 @@ function LockGate({ children }: { children: React.ReactNode }) {
 
 function AppInner() {
   const insets = useSafeAreaInsets();
-  const [sub, setSub] = useState<'none' | 'cats' | 'savings' | 'import' | 'recurring' | 'ledgers' | 'export' | 'accounts' | 'settings'>('none');
+  const [sub, setSub] = useState<'none' | 'cats' | 'savings' | 'import' | 'recurring' | 'ledgers' | 'export' | 'accounts' | 'settings' | 'dead'>('none');
   const [ledgerEpoch, setLedgerEpoch] = useState(0);
+  const [drillCat, setDrillCat] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState<Tab>('record');
   const [txs, setTxs] = useState<TransactionRow[]>([]);
@@ -679,6 +681,7 @@ function AppInner() {
   if (sub === 'export') return <ExportLedger onBack={() => setSub('none')} />;
   if (sub === 'accounts') return <AccountsScreen onBack={() => { setSub('none'); setLedgerEpoch((e) => e + 1); }} />;
   if (sub === 'settings') return <AccountSettings onBack={() => setSub('none')} onLogged={() => { setSub('none'); setLogged(false); setLedgerEpoch((e) => e + 1); }} />;
+  if (sub === 'dead') return <DeadLetterScreen onBack={() => setSub('none')} />;
   return (
     <View style={[styles.app, { paddingTop: insets.top }]}>
       <Text style={styles.title}>帽子记账本</Text>
@@ -686,8 +689,8 @@ function AppInner() {
         {tab === 'record' && (
           <RecordScreen onSaved={() => void refreshTxs()} />
         )}
-        {tab === 'list' && <ListScreen />}
-        {tab === 'report' && <ReportScreen />}
+        {tab === 'list' && <ListScreen drillCat={drillCat} onClearDrill={() => setDrillCat(null)} />}
+        {tab === 'report' && <ReportScreen onDrill={(catId) => { setDrillCat(catId); setTab('list'); }} />}
         {tab === 'me' && <MeScreen key={`me${ledgerEpoch}`} logged={logged} onLogged={(v) => setLogged(v)} onOpen={(p) => setSub(p)} syncText={`${sync.state}${sync.pending > 0 ? ` · 待同步 ${sync.pending}` : ''}`} />}
       </View>
       <View style={[styles.tabbar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
@@ -937,7 +940,9 @@ function RecordScreen({ onSaved }: { onSaved: () => void }) {
   };
 
   const save = async () => {
-    const v = Number(amount);
+    // T-25:支持表达式(12.5+8 → 20.5)
+    const ev = evalExpr(amount);
+    const v = ev ?? Number(amount);
     if (!v || v <= 0) return;
     if (type === 'transfer') {
       if (!fromAcc || !toAcc || fromAcc === toAcc) return;
@@ -1047,7 +1052,7 @@ function RecordScreen({ onSaved }: { onSaved: () => void }) {
       </View>
       )}
       <Pressable style={[styles.saveBtn, (!amount || (type !== 'transfer' && !selected) || (type === 'transfer' && (!fromAcc || fromAcc === toAcc))) && styles.disabled]} onPress={() => void save()}>
-        <Text style={styles.saveText}>保存{amount ? ` ¥${formatAmount(amount)}` : ''}</Text>
+        <Text style={styles.saveText}>保存{amount ? (() => { const ev = evalExpr(amount); return ` ¥${formatAmount(String(ev ?? Number(amount)))}`; })() : ''}</Text>
       </Pressable>
       {amount && (type === 'transfer' ? fromAcc && toAcc : selected) && (
         <Pressable style={{ alignItems: 'center', padding: 6 }} onPress={() => {
@@ -1084,7 +1089,7 @@ function monthRange(offset: number): { start: number; end: number; label: string
 
 const PAGE = 50;
 
-function ListScreen() {
+function ListScreen({ drillCat, onClearDrill }: { drillCat: string | null; onClearDrill: () => void }) {
   const [rows, setRows] = useState<Array<TransactionRow & { cat_name?: string; cat_icon?: string }>>([]);
   const [offset, setOffset] = useState(0);
   const [monthOffset, setMonthOffset] = useState(0);
@@ -1097,7 +1102,7 @@ function ListScreen() {
   const [editAmount, setEditAmount] = useState('');
   const [editNote, setEditNote] = useState('');
   const [accounts, setAccounts] = useState<Array<{ id: string; name: string }>>([]);
-  const [view, setView] = useState<'active' | 'recycled'>('active');
+  const [view, setView] = useState<'active' | 'calendar' | 'recycled'>('active');
   const [minAmt, setMinAmt] = useState('');
   const [maxAmt, setMaxAmt] = useState('');
   const [accFilter, setAccFilter] = useState('all');
@@ -1105,6 +1110,20 @@ function ListScreen() {
   const [dateTo, setDateTo] = useState('');
   const [showAdv, setShowAdv] = useState(false);
   const mr = monthRange(monthOffset);
+
+  useEffect(() => { if (drillCat) void load(0, true); }, [drillCat]); // eslint-disable-line react-hooks/exhaustive-deps
+  const calDays = (() => {
+    const m = new Map<number, number>();
+    for (const t of rows) {
+      if (t.is_deleted) continue;
+      const day = new Date(t.happened_at).getDate();
+      m.set(day, (m.get(day) ?? 0) + Number(t.amount));
+    }
+    const dim = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
+    return Array.from({ length: dim }, (_, i) => ({ day: i + 1, spend: m.get(i + 1) ?? 0 }));
+  })();
+
+  const [calSel, setCalSel] = useState<number | null>(null);
 
   const load = async (off: number, replace: boolean) => {
     setBusy(true);
@@ -1124,6 +1143,7 @@ function ListScreen() {
       if (accFilter !== 'all') { clauses.push('(t.account_id = ? OR t.to_account_id = ?)'); params.push(accFilter, accFilter); }
       if (dateFrom) { clauses.push('t.happened_at >= ?'); params.push(new Date(dateFrom).getTime()); }
       if (dateTo) { clauses.push('t.happened_at < ?'); params.push(new Date(dateTo).getTime() + 86_399_000); }
+      if (drillCat) { clauses.push('t.category_id = ?'); params.push(drillCat); }
       const where = clauses.join(' AND ');
       const got = await db.getAllAsync<TransactionRow & { cat_name?: string; cat_icon?: string }>(
         `SELECT t.*, c.name AS cat_name, c.icon AS cat_icon FROM transactions t
@@ -1158,10 +1178,10 @@ function ListScreen() {
           : <Text style={{ fontSize: 18, color: 'transparent' }}>›</Text>}
       </View>
       <View style={{ flexDirection: 'row', paddingHorizontal: 12, paddingTop: 8, gap: 8 }}>
-        {(['active', 'recycled'] as const).map((v) => (
+        {(['active', 'calendar', 'recycled'] as const).map((v) => (
           <Pressable key={v} onPress={() => setView(v)}
             style={{ paddingVertical: 4, paddingHorizontal: 10, borderRadius: 12, backgroundColor: view === v ? '#1a1c23' : '#eef0f6' }}>
-            <Text style={{ fontSize: 12, color: view === v ? '#fff' : '#4a5160' }}>{v === 'active' ? '流水' : '🗑 回收站'}</Text>
+            <Text style={{ fontSize: 12, color: view === v ? '#fff' : '#4a5160' }}>{v === 'active' ? '流水' : v === 'calendar' ? '📅 日历' : '🗑 回收站'}</Text>
           </Pressable>
         ))}
         <Pressable onPress={() => setShowAdv((v) => !v)} style={{ paddingVertical: 4, paddingHorizontal: 10, borderRadius: 12, backgroundColor: '#eef0f6' }}>
@@ -1207,6 +1227,30 @@ function ListScreen() {
         <Text style={{ fontSize: 12, color: '#d64545' }}>支 ¥{formatAmount(String(monthSum.expense))}</Text>
         {busy && <Text style={{ fontSize: 12, color: '#8a93a5' }}>加载中…</Text>}
       </View>
+      {view === 'calendar' && (
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 12, gap: 8 }}>
+          {calDays.map((d) => (
+            <Pressable key={d.day} style={{ backgroundColor: d.spend > 0 ? '#fff' : '#f0f1f5', borderRadius: 10, padding: 12 }}
+              onPress={() => setCalSel(calSel === d.day ? null : d.day)}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Text style={{ fontSize: 13, fontWeight: '600', color: '#1a1c23' }}>{d.day} 日</Text>
+                <Text style={{ fontSize: 13, color: d.spend > 0 ? '#d64545' : '#b4bac6' }}>{d.spend > 0 ? `¥${formatAmount(String(d.spend))}` : '-'}</Text>
+              </View>
+              {calSel === d.day && (
+                <View style={{ marginTop: 8, borderTopWidth: 1, borderTopColor: '#f0f1f5', paddingTop: 6, gap: 4 }}>
+                  {rows.filter((t) => new Date(t.happened_at).getDate() === d.day).map((t) => (
+                    <View key={t.id} style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                      <Text style={{ fontSize: 12, color: '#4a5160' }}>{t.note || t.cat_name || t.type}</Text>
+                      <Text style={{ fontSize: 12, color: '#1a1c23' }}>¥{formatAmount(String(t.amount))}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </Pressable>
+          ))}
+        </ScrollView>
+      )}
+      {view !== 'calendar' && (
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.list}>
         {rows.map((t) => (
           <Pressable key={t.id} style={styles.txRow} onPress={() => { setEditRow(t); setEditAmount(String(t.amount)); setEditNote(String(t.note ?? '')); }}>
@@ -1232,6 +1276,7 @@ function ListScreen() {
           </Pressable>
         )}
       </ScrollView>
+      )}
       {editRow && (
         <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' }}>
           <View style={{ backgroundColor: '#fff', borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: 16, gap: 10 }}>
@@ -1277,10 +1322,10 @@ function ListScreen() {
   );
 }
 
-function ReportScreen() {
+function ReportScreen({ onDrill }: { onDrill: (catId: string) => void }) {
   const [monthOffset, setMonthOffset] = useState(0);
   const [sum, setSum] = useState({ income: 0, expense: 0 });
-  const [byCat, setByCat] = useState<Array<{ name: string; icon: string; total: number; pct: number }>>([]);
+  const [byCat, setByCat] = useState<Array<{ name: string; icon: string; total: number; pct: number; catId: string | null }>>([]);
   const [busy, setBusy] = useState(false);
   const mr = monthRange(monthOffset);
 
@@ -1298,13 +1343,13 @@ function ReportScreen() {
         income: Number(sums.find((r) => r.type === 'income')?.s ?? 0),
         expense: Number(sums.find((r) => r.type === 'expense')?.s ?? 0),
       });
-      const cats = await db.getAllAsync<{ name: string; icon: string; s: number }>(
-        `SELECT COALESCE(c.name, '未分类') AS name, COALESCE(c.icon, '📦') AS icon,
+      const cats = await db.getAllAsync<{ name: string; icon: string; s: number; catId: string | null }>(
+        `SELECT COALESCE(c.name, '未分类') AS name, COALESCE(c.icon, '📦') AS icon, t.category_id AS catId,
                 SUM(CAST(t.amount AS REAL)) AS s
          FROM transactions t LEFT JOIN categories c ON t.category_id = c.id
          WHERE ${base} AND t.type = 'expense' GROUP BY t.category_id ORDER BY s DESC LIMIT 10`, bparams);
       const max = Number(cats[0]?.s ?? 0) || 1;
-      setByCat(cats.map((r) => ({ name: r.name, icon: r.icon, total: Number(r.s), pct: Math.round((Number(r.s) / max) * 100) })));
+      setByCat(cats.map((r) => ({ name: r.name, icon: r.icon, total: Number(r.s), pct: Math.round((Number(r.s) / max) * 100), catId: r.catId })));
     } finally {
       setBusy(false);
     }
@@ -1342,7 +1387,7 @@ function ReportScreen() {
           <Text style={{ fontSize: 13, fontWeight: '700', color: '#1a1c23', marginBottom: 10 }}>支出分类排行 Top10</Text>
           {byCat.length === 0 && <Text style={{ color: '#8a93a5', fontSize: 12 }}>本月暂无支出</Text>}
           {byCat.map((c, i) => (
-            <View key={c.name + i} style={{ marginBottom: 10 }}>
+            <Pressable key={c.name + i} style={{ marginBottom: 10 }} onPress={() => onDrill(String(c.catId ?? ''))}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                 <Text style={{ fontSize: 12, color: '#1a1c23' }}>{c.icon} {c.name}</Text>
                 <Text style={{ fontSize: 12, color: '#4a5160' }}>¥{formatAmount(String(c.total))}</Text>
@@ -1350,7 +1395,7 @@ function ReportScreen() {
               <View style={{ height: 6, backgroundColor: '#eef0f6', borderRadius: 3 }}>
                 <View style={{ height: 6, width: `${Math.max(4, c.pct)}%`, backgroundColor: i === 0 ? '#4361ee' : '#8fa3f5', borderRadius: 3 }} />
               </View>
-            </View>
+            </Pressable>
           ))}
           {busy && <Text style={{ color: '#8a93a5', fontSize: 12 }}>加载中…</Text>}
         </View>
@@ -1818,7 +1863,47 @@ function AccountSettings({ onBack, onLogged }: { onBack: () => void; onLogged: (
 }
 
 
-function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onLogged: (v: boolean) => void; syncText: string; onOpen: (p: 'cats' | 'savings' | 'import' | 'recurring' | 'ledgers' | 'export' | 'accounts' | 'settings') => void }) {
+/** 同步诊断(T-32):死信列表 + 清空(deadletter 表) */
+function DeadLetterScreen({ onBack }: { onBack: () => void }) {
+  const [rows, setRows] = useState<Array<Record<string, unknown>>>([]);
+
+  const load = async () => {
+    await initDb();
+    try {
+      const r = await db.getAllAsync<Record<string, unknown>>('SELECT * FROM deadletter ORDER BY created_at DESC LIMIT 200');
+      setRows(r);
+    } catch { setRows([]); }
+  };
+  useEffect(() => { void load(); }, []);
+
+  return (
+    <View style={{ flex: 1, backgroundColor: '#f6f7f9' }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', paddingTop: 50, paddingHorizontal: 12, paddingBottom: 8 }}>
+        <Pressable onPress={onBack}><Text style={{ fontSize: 16, color: '#4361ee' }}>‹ 返回</Text></Pressable>
+        <Text style={{ flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '700', color: '#1a1c23' }}>同步诊断(死信)</Text>
+        <Text style={{ fontSize: 14, color: '#4361ee' }}>{rows.length}</Text>
+      </View>
+      <ScrollView contentContainerStyle={{ padding: 12, gap: 8 }}>
+        {rows.map((r, i) => (
+          <View key={String(r.id ?? i)} style={{ backgroundColor: '#fff', borderRadius: 10, padding: 10 }}>
+            <Text style={{ fontSize: 12, color: '#1a1c23' }}>{String(r.entity ?? '?')} · {String(r.reason ?? '').slice(0, 60)}</Text>
+            <Text style={{ fontSize: 10, color: '#8a93a5' }}>{String(r.created_at ?? '')}</Text>
+          </View>
+        ))}
+        {rows.length === 0 && <Text style={{ color: '#8a93a5', fontSize: 13, textAlign: 'center' }}>没有死信,同步一切正常</Text>}
+        {rows.length > 0 && (
+          <Pressable style={{ ...styles.saveBtn, backgroundColor: '#d64545' }}
+            onPress={() => { void (async () => { await db.execAsync('DELETE FROM deadletter'); await load(); })(); }}>
+            <Text style={styles.saveText}>清空死信</Text>
+          </Pressable>
+        )}
+      </ScrollView>
+    </View>
+  );
+}
+
+
+function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onLogged: (v: boolean) => void; syncText: string; onOpen: (p: 'cats' | 'savings' | 'import' | 'recurring' | 'ledgers' | 'export' | 'accounts' | 'settings' | 'dead') => void }) {
   const [server, setServer] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -1945,6 +2030,9 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
       </View>
       <Pressable style={{ backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('settings')}>
         <Text style={{ fontSize: 13, color: '#1a1c23' }}>⚙️ 账号设置</Text>
+      </Pressable>
+      <Pressable style={{ backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('dead')}>
+        <Text style={{ fontSize: 13, color: '#1a1c23' }}>🩺 同步诊断(死信)</Text>
       </Pressable>
       <Pressable style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12 }}
         onPress={() => {
