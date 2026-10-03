@@ -8,7 +8,7 @@ import { formatAmount, newId, type TransactionRow, type TransactionType } from '
 import { useSyncExternalStore } from 'react';
 import { engine, scheduleSync, snapshot, startMobileAutoSync } from './src/lib/sync';
 import { runDueRecurring } from './src/lib/recurring';
-import { initDb, resetInitCache, listRecent, saveTx, topCategories, getActiveLedgerId, metaGet, metaSet, db } from './src/lib/store';
+import { initDb, resetInitCache, createLedgerWithSeed, listRecent, saveTx, topCategories, getActiveLedgerId, metaGet, metaSet, db } from './src/lib/store';
 import { resetLocalDatabase } from './src/lib/db';
 import { prepareAfterLogin, saveLocal } from '@ledgerone/sqlite-sync';
 import { authApi, clearSession, getServerUrl, isLoggedIn, logout as logoutAll, saveSession, setServerUrl, SERVER_PRESETS, resolveServerUrl } from './src/lib/api';
@@ -805,7 +805,7 @@ function RecordScreen({ onSaved }: { onSaved: () => void }) {
     const now = Date.now();
     const tx = {
       id: newId(), ledger_id: ledgerId, user_id: 'local', member_id: null, type,
-      amount: v.toFixed(2), currency: 'CNY', amount_base: v.toFixed(2), exchange_rate: null,
+      amount: v.toFixed(2), currency: (await metaGet(db, 'base_currency') as string) ?? 'CNY', amount_base: v.toFixed(2), exchange_rate: null,
       category_id: type === 'transfer' ? null : selected,
       account_id: fromAcc ?? (await db.getAllAsync<{ id: string }>('SELECT id FROM accounts WHERE is_deleted = 0 ORDER BY sort LIMIT 1'))[0]?.id ?? '',
       to_account_id: type === 'transfer' ? toAcc : null, happened_at: now, note: '', is_refunded: 0, refund_of_id: null,
@@ -1187,15 +1187,8 @@ function LedgerManager({ onBack }: { onBack: () => void }) {
   const create = async () => {
     const nm = name.trim().slice(0, 30);
     if (!nm) return;
-    const ledgerId = await getActiveLedgerId();
-    const now = Date.now();
-    const row = { id: newId(), name: nm, type: 'personal', owner_user_id: 'local', icon: '📒', sort: now,
-      client_version: 1, server_version: null, is_deleted: false, deleted_at: null, created_at: now, updated_at: now };
-    await saveLocal(db, 'ledger', row as never);
-    await saveLocal(db, 'ledger_member', { id: newId(), ledger_id: row.id, user_id: 'local', role: 'owner',
-      client_version: 1, server_version: null, is_deleted: false, deleted_at: null, created_at: now, updated_at: now } as never);
-    // 新账本同样播种默认分类/账户(复用 seed 逻辑:临时切 active 再触发)
-    await metaSet(db, 'active_ledger', row.id);
+    const id = await createLedgerWithSeed(nm); // T-03:播种默认分类与账户,修复新账本无分类可用
+    await metaSet(db, 'active_ledger', id);
     setName(''); setCreating(false);
     onBack();
   };
@@ -1328,8 +1321,9 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
       setServer(await getServerUrl());
       if (logged) {
         try {
-          const u = (await authApi.me()) as { email?: string; nickname?: string };
+          const u = (await authApi.me()) as { email?: string; nickname?: string; base_currency?: string };
           setMe({ email: u.email, nickname: u.nickname });
+          if (u.base_currency) await metaSet(db, 'base_currency', u.base_currency); // T-02:主币种跟随账号
         } catch { /* token 失效等场景静默,下轮刷新 */ }
       } else {
         setMe(null);

@@ -39,12 +39,27 @@ export async function metaSet(db: SQLiteLike, key: string, value: unknown): Prom
 }
 
 /** 本地写入 + 入队:App 端所有写操作的第一入口(PRD 5.4 本地为第一写入口) */
+/** T-01:移动端(SQLite 整数)写入的布尔字段归一化为 boolean,保证 outbox payload 与 Web(Dexie boolean)一致 */
+const BOOLEAN_FIELDS = new Set([
+  'is_deleted', 'is_refunded', 'exclude_from_budget', 'is_hidden', 'is_preset',
+  'include_in_net', 'is_archived', 'paused', 'rollover',
+]);
+
+function normalizeBooleans(row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...row };
+  for (const k of Object.keys(out)) {
+    if (BOOLEAN_FIELDS.has(k) && (out[k] === 0 || out[k] === 1)) out[k] = Boolean(out[k]);
+  }
+  return out;
+}
+
 export async function saveLocal(
   db: SQLiteLike,
   entity: EntityKind,
   row: AnyRow,
   opts: { op?: 'upsert' | 'delete'; deviceId?: string; base?: AnyRow | null } = {},
 ): Promise<void> {
+  row = normalizeBooleans(row);
   const { sql, params } = upsertSql(entity, row);
   if (db.withExclusiveTransactionAsync) {
     await db.withExclusiveTransactionAsync(async (tx) => {

@@ -51,6 +51,37 @@ function stamp(): Stamp {
   return { client_version: 1, server_version: null, is_deleted: false, deleted_at: null, created_at: now, updated_at: now };
 }
 
+/** 新建账本并播种默认分类/账户(T-03:修复 LedgerManager 只切 active 不播种的缺陷) */
+export async function createLedgerWithSeed(name: string, icon = '📒'): Promise<string> {
+  const ledgerId = newId();
+  const now = Date.now();
+  const stamp = () => ({ client_version: 1, server_version: null, is_deleted: false, deleted_at: null, created_at: now, updated_at: now });
+  const ledger = { id: ledgerId, owner_user_id: 'local', name, type: 'personal', icon, sort: 0, ...stamp() };
+  await saveLocal(db, 'ledger', ledger as never);
+  const defs = [
+    ...PRESET_EXPENSE_CATEGORIES.map((d) => ({ ...d, kind: 'expense' as const })),
+    ...PRESET_INCOME_CATEGORIES.map((d) => ({ ...d, kind: 'income' as const })),
+  ];
+  let sort = 0;
+  for (const d of defs) {
+    const topId = newId();
+    await saveLocal(db, 'category', { id: topId, ledger_id: ledgerId, parent_id: null, name: d.name, kind: d.kind, icon: d.icon, color: null, sort: sort++, is_hidden: false, is_preset: true, ...stamp() } as never);
+    for (const child of d.children) {
+      await saveLocal(db, 'category', { id: newId(), ledger_id: ledgerId, parent_id: topId, name: child, kind: d.kind, icon: d.icon, color: null, sort: sort++, is_hidden: false, is_preset: true, ...stamp() } as never);
+    }
+  }
+  const accounts = [
+    { name: '现金', type: 'cash' },
+    { name: '储蓄卡', type: 'debit_card' },
+  ];
+  for (let i = 0; i < accounts.length; i++) {
+    await saveLocal(db, 'account', { id: newId(), ledger_id: ledgerId, name: accounts[i].name, type: accounts[i].type,
+      initial_balance: '0', initial_date: now, currency: DEFAULT_CURRENCY, include_in_net: true, is_archived: false, sort: i,
+      credit_bill_day: null, credit_due_day: null, credit_limit: null, balance_cached: null, ...stamp() } as never);
+  }
+  return ledgerId;
+}
+
 async function ensureSeed(): Promise<void> {
   console.log('[boot] seed:meta-get:start');
   if (await metaGet(db, 'seeded')) { console.log('[boot] seed:already'); return; }
