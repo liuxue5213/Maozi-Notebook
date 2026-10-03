@@ -2024,9 +2024,6 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
         <Pressable style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('accounts')}>
           <Text style={{ fontSize: 13, color: '#1a1c23' }}>💼 账户与资产</Text>
         </Pressable>
-        <Pressable style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('ledgers')}>
-          <Text style={{ fontSize: 13, color: '#1a1c23' }}>📚 账本管理</Text>
-        </Pressable>
       </View>
       <Pressable style={{ backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('settings')}>
         <Text style={{ fontSize: 13, color: '#1a1c23' }}>⚙️ 账号设置</Text>
