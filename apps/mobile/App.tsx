@@ -1,6 +1,6 @@
 import './src/lib/polyfills'; // 必须最先:uuid@14 裸用全局 crypto,Hermes 没有,必须先垫上
 import { buildBudgetModel, netSavings, type BudgetModel } from '@ledgerone/ledger-core';
-import { isValidAmount, parseTextLedger, reconcileTextLedger } from '@ledgerone/domain';
+import { isValidAmount, parseTextLedger, reconcileTextLedger, renderTextLedger, billingCycleRange, daysUntilDue } from '@ledgerone/domain';
 import React, { useCallback, useEffect, useState } from 'react';
 import { BackHandler, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -469,7 +469,8 @@ function RecurringScreen({ onBack }: { onBack: () => void }) {
 
 function AppInner() {
   const insets = useSafeAreaInsets();
-  const [sub, setSub] = useState<'none' | 'cats' | 'savings' | 'import' | 'recurring'>('none');
+  const [sub, setSub] = useState<'none' | 'cats' | 'savings' | 'import' | 'recurring' | 'ledgers' | 'export'>('none');
+  const [ledgerEpoch, setLedgerEpoch] = useState(0);
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState<Tab>('record');
   const [txs, setTxs] = useState<TransactionRow[]>([]);
@@ -542,6 +543,8 @@ function AppInner() {
   if (sub === 'savings') return <SavingsScreen onBack={() => setSub('none')} />;
   if (sub === 'import') return <ImportScreen onBack={() => setSub('none')} />;
   if (sub === 'recurring') return <RecurringScreen onBack={() => setSub('none')} />;
+  if (sub === 'ledgers') return <LedgerManager onBack={() => { setSub('none'); setLedgerEpoch((e) => e + 1); }} />;
+  if (sub === 'export') return <ExportLedger onBack={() => setSub('none')} />;
   return (
     <View style={[styles.app, { paddingTop: insets.top }]}>
       <Text style={styles.title}>帽子记账本</Text>
@@ -551,7 +554,7 @@ function AppInner() {
         )}
         {tab === 'list' && <ListScreen />}
         {tab === 'report' && <ReportScreen />}
-        {tab === 'me' && <MeScreen logged={logged} onLogged={(v) => setLogged(v)} onOpen={(p) => setSub(p)} syncText={`${sync.state}${sync.pending > 0 ? ` · 待同步 ${sync.pending}` : ''}`} />}
+        {tab === 'me' && <MeScreen key={`me${ledgerEpoch}`} logged={logged} onLogged={(v) => setLogged(v)} onOpen={(p) => setSub(p)} syncText={`${sync.state}${sync.pending > 0 ? ` · 待同步 ${sync.pending}` : ''}`} />}
       </View>
       <View style={[styles.tabbar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
         {([
@@ -565,6 +568,47 @@ function AppInner() {
           </Pressable>
         ))}
       </View>
+    </View>
+  );
+}
+
+/** 信用卡还款提醒横幅(移植 Web M09-F06):本期账单 3 天内到期时提醒 */
+function CreditBanner() {
+  const [alert, setAlert] = useState<{ name: string; bill: number; dueIn: number } | null>(null);
+  const [hidden, setHidden] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      await initDb();
+      const now = new Date();
+      const cards = await db.getAllAsync<Record<string, unknown>>(
+        "SELECT * FROM accounts WHERE is_deleted = 0 AND is_archived = 0 AND type = 'credit_card' AND credit_due_day IS NOT NULL");
+      for (const a of cards) {
+        const dueDay = Number(a.credit_due_day);
+        const { start } = billingCycleRange(dueDay, now);
+        const txs = await db.getAllAsync<{ type: string; amount_base: string; account_id: string; to_account_id: string | null }>(
+          'SELECT type, amount_base, account_id, to_account_id FROM transactions WHERE is_deleted = 0 AND happened_at >= ?', [start]);
+        const onCard = txs.filter((t) => t.account_id === a.id || t.to_account_id === a.id);
+        const spend = onCard.filter((t) => t.type === 'expense').reduce((acc, t) => acc + Number(t.amount_base), 0);
+        const repaid = onCard.filter((t) => t.type === 'transfer' && t.to_account_id === a.id).reduce((acc, t) => acc + Number(t.amount_base), 0);
+        const bill = spend - repaid;
+        const dueIn = daysUntilDue(dueDay, now);
+        if (bill > 0 && dueIn <= 3) {
+          setAlert({ name: String(a.name), bill, dueIn });
+          return;
+        }
+      }
+      setAlert(null);
+    })();
+  }, []);
+
+  if (!alert || hidden) return null;
+  return (
+    <View style={{ backgroundColor: '#fff8e6', borderRadius: 10, padding: 10, marginBottom: 8, flexDirection: 'row', alignItems: 'center' }}>
+      <Text style={{ flex: 1, fontSize: 12, color: '#8a6d1a' }}>
+        💳 {alert.name} 本期账单 ¥{formatAmount(String(alert.bill))}{alert.dueIn > 0 ? `,${alert.dueIn} 天后还款` : alert.dueIn === 0 ? ',今天还款日' : ',已过还款日'}
+      </Text>
+      <Pressable onPress={() => setHidden(true)}><Text style={{ fontSize: 12, color: '#8a6d1a' }}>知道了</Text></Pressable>
     </View>
   );
 }
@@ -688,6 +732,8 @@ function BudgetCard() {
   );
 }
 
+interface Tpl { id: string; name: string; type: string; amount: string; category_id: string | null; account_id: string | null }
+
 function RecordScreen({ onSaved }: { onSaved: () => void }) {
   const [type, setType] = useState<TransactionType>('expense');
   const [amount, setAmount] = useState('');
@@ -699,6 +745,7 @@ function RecordScreen({ onSaved }: { onSaved: () => void }) {
   const [accounts, setAccounts] = useState<Array<{ id: string; name: string }>>([]);
   const [fromAcc, setFromAcc] = useState<string | null>(null);
   const [toAcc, setToAcc] = useState<string | null>(null);
+  const [tpls, setTpls] = useState<Array<Tpl>>([]);
 
   const refreshAccounts = async () => {
     const ledgerId = await getActiveLedgerId();
@@ -706,6 +753,9 @@ function RecordScreen({ onSaved }: { onSaved: () => void }) {
       'SELECT id, name FROM accounts WHERE is_deleted = 0 AND ledger_id = ? ORDER BY sort', [ledgerId]);
     setAccounts(rows);
     setFromAcc((prev) => prev ?? rows[0]?.id ?? null);
+    await db.execAsync(
+      'CREATE TABLE IF NOT EXISTS tx_templates (id TEXT PRIMARY KEY, name TEXT, type TEXT, amount TEXT, category_id TEXT, account_id TEXT, created_at INTEGER)');
+    setTpls(await db.getAllAsync<Tpl>('SELECT * FROM tx_templates ORDER BY created_at DESC LIMIT 8'));
   };
 
   const refreshCats = async () => {
@@ -773,6 +823,7 @@ function RecordScreen({ onSaved }: { onSaved: () => void }) {
 
   return (
     <ScrollView contentContainerStyle={styles.form}>
+      <CreditBanner />
       <BudgetCard />
       <View style={styles.typeRow}>
         {(['expense', 'income', 'transfer'] as TransactionType[]).map((t) => (
@@ -789,6 +840,23 @@ function RecordScreen({ onSaved }: { onSaved: () => void }) {
         placeholder="0.00"
         placeholderTextColor="#b4bac6"
       />
+      {tpls.length > 0 && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 8 }} contentContainerStyle={{ gap: 6 }}>
+          {tpls.map((t) => (
+            <Pressable key={t.id} style={{ backgroundColor: '#fff', borderRadius: 14, paddingVertical: 6, paddingHorizontal: 12, borderWidth: 1, borderColor: '#e3e6ee' }}
+              onPress={() => {
+                setType(t.type as TransactionType);
+                setAmount(t.amount);
+                setSelected(t.category_id);
+                setFromAcc(t.account_id ?? fromAcc);
+                setMsg(`已预填「${t.name}」`);
+                setTimeout(() => setMsg(null), 1200);
+              }}>
+              <Text style={{ fontSize: 12, color: '#1a1c23' }}>⚡ {t.name} ¥{formatAmount(t.amount)}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+      )}
       {type === 'transfer' ? (
         <View style={{ gap: 8, marginBottom: 8 }}>
           {([['转出账户', fromAcc, setFromAcc], ['转入账户', toAcc, setToAcc]] as const).map(([label, val, setter], idx) => (
@@ -839,6 +907,24 @@ function RecordScreen({ onSaved }: { onSaved: () => void }) {
       <Pressable style={[styles.saveBtn, (!amount || (type !== 'transfer' && !selected) || (type === 'transfer' && (!fromAcc || fromAcc === toAcc))) && styles.disabled]} onPress={() => void save()}>
         <Text style={styles.saveText}>保存{amount ? ` ¥${formatAmount(amount)}` : ''}</Text>
       </Pressable>
+      {amount && (type === 'transfer' ? fromAcc && toAcc : selected) && (
+        <Pressable style={{ alignItems: 'center', padding: 6 }} onPress={() => {
+          void (async () => {
+            await initDb();
+            const catName = cats.find((c) => c.id === selected)?.name ?? '转账';
+            const tplName = `${catName}${new Date().getMonth() + 1}/${new Date().getDate()}`;
+            if (!tplName) return;
+            await db.execAsync('CREATE TABLE IF NOT EXISTS tx_templates (id TEXT PRIMARY KEY, name TEXT, type TEXT, amount TEXT, category_id TEXT, account_id TEXT, created_at INTEGER)');
+            await db.runAsync('INSERT INTO tx_templates (id, name, type, amount, category_id, account_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+              [newId(), tplName, type, amount, selected, fromAcc, Date.now()]);
+            await refreshAccounts(); // 复用:重新加载模板
+            setMsg(`已存模板「${tplName}」`);
+            setTimeout(() => setMsg(null), 1500);
+          })();
+        }}>
+          <Text style={{ fontSize: 12, color: '#8a93a5' }}>⚡ 存为快捷模板</Text>
+        </Pressable>
+      )}
       {msg && <Text style={styles.msg}>{msg}</Text>}
     </ScrollView>
   );
@@ -1076,7 +1162,159 @@ function ReportScreen() {
   );
 }
 
-function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onLogged: (v: boolean) => void; syncText: string; onOpen: (p: 'cats' | 'savings' | 'import' | 'recurring') => void }) {
+/** 账本管理:多账本切换 / 新建 / 重命名 */
+function LedgerManager({ onBack }: { onBack: () => void }) {
+  const [ledgers, setLedgers] = useState<Array<Record<string, unknown> & { active?: number }>>([]);
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+
+  const load = async () => {
+    await initDb();
+    const active = await getActiveLedgerId();
+    const rows = await db.getAllAsync<Record<string, unknown>>(
+      'SELECT * FROM ledgers WHERE is_deleted = 0 ORDER BY created_at ASC');
+    setLedgers(rows.map((r) => ({ ...r, active: String(r.id) === String(active) ? 1 : 0 })));
+  };
+  useEffect(() => { void load(); }, []);
+
+  const switchTo = async (id: string) => {
+    await metaSet(db, 'active_ledger', id);
+    onBack();
+  };
+
+  const create = async () => {
+    const nm = name.trim().slice(0, 30);
+    if (!nm) return;
+    const ledgerId = await getActiveLedgerId();
+    const now = Date.now();
+    const row = { id: newId(), name: nm, type: 'personal', owner_user_id: 'local', icon: '📒', sort: now,
+      client_version: 1, server_version: null, is_deleted: false, deleted_at: null, created_at: now, updated_at: now };
+    await saveLocal(db, 'ledger', row as never);
+    await saveLocal(db, 'ledger_member', { id: newId(), ledger_id: row.id, user_id: 'local', role: 'owner',
+      client_version: 1, server_version: null, is_deleted: false, deleted_at: null, created_at: now, updated_at: now } as never);
+    // 新账本同样播种默认分类/账户(复用 seed 逻辑:临时切 active 再触发)
+    await metaSet(db, 'active_ledger', row.id);
+    setName(''); setCreating(false);
+    onBack();
+  };
+
+  const rename = async (row: Record<string, unknown>) => {
+    const nm = draft.trim().slice(0, 30);
+    setEditingId(null);
+    if (!nm || nm === row.name) return;
+    const now = Date.now();
+    await saveLocal(db, 'ledger', { ...row, name: nm, client_version: Number(row.client_version ?? 0) + 1, updated_at: now } as never);
+    void load();
+  };
+
+  return (
+    <View style={{ flex: 1, backgroundColor: '#f6f7f9' }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', paddingTop: 50, paddingHorizontal: 12, paddingBottom: 8 }}>
+        <Pressable onPress={onBack}><Text style={{ fontSize: 16, color: '#4361ee' }}>‹ 返回</Text></Pressable>
+        <Text style={{ flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '700', color: '#1a1c23' }}>账本管理</Text>
+        <Pressable onPress={() => setCreating((v) => !v)}><Text style={{ fontSize: 20, color: '#4361ee' }}>＋</Text></Pressable>
+      </View>
+      <ScrollView contentContainerStyle={{ padding: 12, gap: 8 }}>
+        {ledgers.map((row) => {
+          const id = String(row.id);
+          return (
+            <View key={id} style={{ backgroundColor: '#fff', borderRadius: 12, padding: 14, borderWidth: row.active ? 2 : 0, borderColor: '#4361ee' }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Text style={{ fontSize: 18 }}>{String(row.icon ?? '📒')}</Text>
+                {editingId === id ? (
+                  <TextInput
+                    style={{ flex: 1, borderBottomWidth: 1, borderColor: '#4361ee', fontSize: 14, color: '#1a1c23', paddingVertical: 2 }}
+                    value={draft} autoFocus onChangeText={(t) => setDraft(t.slice(0, 30))}
+                    onSubmitEditing={() => void rename(row)} onBlur={() => void rename(row)}
+                  />
+                ) : (
+                  <Text style={{ flex: 1, fontSize: 14, fontWeight: '600', color: '#1a1c23' }}>
+                    {String(row.name)}{row.active ? ' · 当前' : ''}
+                  </Text>
+                )}
+                {editingId !== id && (
+                  <Pressable onPress={() => { setEditingId(id); setDraft(String(row.name)); }}>
+                    <Text style={{ color: '#4361ee', fontSize: 13 }}>重命名</Text>
+                  </Pressable>
+                )}
+              </View>
+              {!row.active && (
+                <Pressable style={{ marginTop: 8, backgroundColor: '#eef0f6', borderRadius: 8, paddingVertical: 6, alignItems: 'center' }}
+                  onPress={() => void switchTo(id)}>
+                  <Text style={{ fontSize: 12, color: '#1a1c23' }}>切换到此账本</Text>
+                </Pressable>
+              )}
+            </View>
+          );
+        })}
+        {creating && (
+          <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 14, gap: 8 }}>
+            <TextInput style={styles.input} value={name} onChangeText={(t) => setName(t.slice(0, 30))} placeholder="新账本名称" placeholderTextColor="#b4bac6" autoFocus />
+            <Pressable style={[styles.saveBtn, !name && styles.disabled]} onPress={() => void create()}>
+              <Text style={styles.saveText}>创建并切换</Text>
+            </Pressable>
+          </View>
+        )}
+        <Text style={{ fontSize: 11, color: '#8a93a5', textAlign: 'center' }}>切换账本后,记账/明细/报表都会显示所选账本的数据</Text>
+      </ScrollView>
+    </View>
+  );
+}
+
+/** 手写账导出:选月份 → 生成手写账文本 → 分享/复制 */
+function ExportLedger({ onBack }: { onBack: () => void }) {
+  const [monthOffset, setMonthOffset] = useState(0);
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const mr = monthRange(monthOffset);
+  const d0 = new Date();
+  d0.setMonth(d0.getMonth() - monthOffset);
+  const year = d0.getFullYear(), month = d0.getMonth() + 1;
+
+  const load = async () => {
+    setBusy(true);
+    try {
+      await initDb();
+      const ledgerId = await getActiveLedgerId();
+      const cats = await db.getAllAsync<{ id: string; name: string }>('SELECT id, name FROM categories WHERE is_deleted = 0 AND ledger_id = ?', [ledgerId]);
+      const catNameOf = (cid: string | null | undefined) => cats.find((c) => c.id === cid)?.name ?? '';
+      const txs = await db.getAllAsync<never>('SELECT * FROM transactions WHERE is_deleted = 0 AND ledger_id = ?', [ledgerId]);
+      setText(renderTextLedger(txs as never, year, month, catNameOf));
+    } finally { setBusy(false); }
+  };
+  useEffect(() => { void load(); }, [monthOffset]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <View style={{ flex: 1, backgroundColor: '#f6f7f9' }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', paddingTop: 50, paddingHorizontal: 12, paddingBottom: 8 }}>
+        <Pressable onPress={onBack}><Text style={{ fontSize: 16, color: '#4361ee' }}>‹ 返回</Text></Pressable>
+        <Text style={{ flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '700', color: '#1a1c23' }}>手写账导出</Text>
+        <Text style={{ fontSize: 16, color: 'transparent' }}>‹</Text>
+      </View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingBottom: 6 }}>
+        <Pressable onPress={() => setMonthOffset((m) => m + 1)}><Text style={{ fontSize: 18, color: '#4a5160' }}>‹</Text></Pressable>
+        <Text style={{ fontWeight: '700', color: '#1a1c23' }}>{mr.label}</Text>
+        {monthOffset > 0
+          ? <Pressable onPress={() => setMonthOffset((m) => Math.max(0, m - 1))}><Text style={{ fontSize: 18, color: '#4a5160' }}>›</Text></Pressable>
+          : <Text style={{ fontSize: 18, color: 'transparent' }}>›</Text>}
+      </View>
+      <ScrollView contentContainerStyle={{ padding: 12, gap: 10 }}>
+        <View style={{ backgroundColor: '#fff', borderRadius: 10, padding: 10 }}>
+          <Text style={{ fontSize: 12, color: '#1a1c23', fontFamily: 'monospace' }}>{text || (busy ? '生成中…' : '本月无支出')}</Text>
+        </View>
+        <Pressable style={styles.saveBtn} onPress={() => { void import('react-native').then((rn) => void rn.Share.share({ message: text })); }}>
+          <Text style={styles.saveText}>分享 / 复制文本</Text>
+        </Pressable>
+        <Text style={{ fontSize: 11, color: '#8a93a5', textAlign: 'center' }}>分享面板里可选择"拷贝到备忘录"等实现复制</Text>
+      </ScrollView>
+    </View>
+  );
+}
+
+
+function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onLogged: (v: boolean) => void; syncText: string; onOpen: (p: 'cats' | 'savings' | 'import' | 'recurring' | 'ledgers' | 'export') => void }) {
   const [server, setServer] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -1182,6 +1420,14 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
         </Pressable>
         <Pressable style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('recurring')}>
           <Text style={{ fontSize: 13, color: '#1a1c23' }}>🔁 循环记账</Text>
+        </Pressable>
+      </View>
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <Pressable style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('ledgers')}>
+          <Text style={{ fontSize: 13, color: '#1a1c23' }}>📚 账本管理</Text>
+        </Pressable>
+        <Pressable style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('export')}>
+          <Text style={{ fontSize: 13, color: '#1a1c23' }}>📄 手写账导出</Text>
         </Pressable>
       </View>
       {!logged && (
