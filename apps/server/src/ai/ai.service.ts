@@ -14,23 +14,35 @@ export class AiService {
     return process.env.AI_API_KEY ?? '';
   }
 
-  /** 通用对话(非流式;流式后续按需加) */
+  /** 通用对话(非流式;流式后续按需加)。8s 超时(P-4):上游卡死时快速失败,由端上走降级文案 */
   async chat(userContent: string, system = '你是记账应用「帽子记账本」的财务分析助手,用简体中文简洁回答。'): Promise<string> {
     if (!this.key) throw new Error('AI_API_KEY 未配置');
-    const res = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${this.key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: this.model,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: userContent },
-        ],
-        stream: false,
-      }),
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${this.key}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: userContent },
+          ],
+          stream: false,
+        }),
+        signal: AbortSignal.timeout(8_000),
+      });
+    } catch {
+      throw new Error('AI 服务超时或不可达,请稍后重试');
+    }
     if (!res.ok) throw new Error(`AI 上游错误 ${res.status}`);
-    const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    let data: { choices?: Array<{ message?: { content?: string } }> };
+    try {
+      data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    } catch {
+      // 审查修复:200 但响应体损坏(截断/非 JSON)时给明确文案,不让裸 SyntaxError 变 500
+      throw new Error('AI 上游返回了无法解析的响应,请稍后重试');
+    }
     return data.choices?.[0]?.message?.content ?? '';
   }
 
@@ -49,7 +61,8 @@ export class AiService {
       `- 本月收入 ${input.income} 元,支出 ${input.expense} 元`,
       input.budget ? `- 月预算 ${input.budget} 元` : '',
       `- 支出分类排行: ${input.topCategories.map((c) => `${c.name} ${c.amount}元`).join('、') || '无'}`,
-      `- 最近流水: ${input.recentTxs.slice(0, 15).map((t) => `${t.date} ${t.note} ${t.amount}元`).join(';') || '无'}`,
+      // P-1 数据最小化:备注仅保留前 8 字再出域,减少个人信息上传第三方模型
+      `- 最近流水: ${input.recentTxs.slice(0, 15).map((t) => `${t.date} ${t.note.slice(0, 8)} ${t.amount}元`).join(';') || '无'}`,
       input.question ? `- 用户问题: ${input.question}` : '- 请指出消费结构特点、异常/可优化项,以及下月建议',
     ].filter(Boolean);
     return this.chat(lines.join('\n'));
