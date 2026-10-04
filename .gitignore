@@ -34,3 +34,4 @@ apps/mobile/android/
 
 # expo 本地缓存
 apps/mobile/.expo/
+apps/mobile/android/local.properties

@@ -10,3 +10,8 @@ allowBuilds:
 # pnpm 11:overrides 写在 workspace 文件;钉住 esbuild 规避 tsx→esbuild@0.28 的平台包解析问题
 overrides:
   esbuild: 0.25.4
+
+# expo-modules-core 57.0.19 的 gradle 插件(kotlin 2.1.20)读不了 expo-modules-autolinking
+# 57.0.13 预编译 jar 的 2.3.0 元数据 → 插件自身升级 Kotlin 2.3.0(与 RN 0.86.3 app 侧 2.1.20 无冲突)
+patchedDependencies:
+  expo-modules-core@57.0.19: patches/expo-modules-core@57.0.19.patch

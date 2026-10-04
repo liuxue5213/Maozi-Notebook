@@ -9,7 +9,7 @@ import { useSyncExternalStore } from 'react';
 import { engine, scheduleSync, snapshot, startMobileAutoSync } from './src/lib/sync';
 import { runDueRecurring } from './src/lib/recurring';
 import { evalExpr } from './src/lib/calc';
-import { isLockEnabled, enableLock, disableLock, biometricAuth, biometricAvailable, setPin, verifyPin, hasPin } from './src/lib/applock';
+import { activeLockMode, biometricAuth, biometricAvailable, disableLock, hasPin, isBiometricDisabled, isLockEnabled, enableLock, setBiometricDisabled, setPin, verifyPin } from './src/lib/applock';
 import { initDb, resetInitCache, createLedgerWithSeed, listRecent, saveTx, topCategories, getActiveLedgerId, metaGet, metaSet, db } from './src/lib/store';
 import { clearSession as clearSessionLocal } from './src/lib/api';
 import { resetLocalDatabase } from './src/lib/db';
@@ -548,28 +548,28 @@ function LockGate({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     void (async () => {
       const on = await isLockEnabled();
-      // 审查修复(P1):「已启用但既无生物识别注册、也无 PIN 哈希」的残留态(如 PIN 设置中途杀 App)
+      // 审查修复(P1):「已启用但没有任何可用解锁方式」的残留态(如 PIN 设置中途杀 App)
       // 会让 verifyPin 对任意输入放行 → 直接自愈为未上锁,杜绝失效开门
-      if (on && !(await biometricAvailable()) && !(await hasPin())) {
+      if (on && (await activeLockMode()) === 'pin' && !(await hasPin())) {
         await disableLock();
         setEnabled(false);
         return;
       }
       setEnabled(on);
       if (on) {
-        const bio = await biometricAvailable();
-        setMode(bio ? 'bio' : 'pin');
+        const mode = await activeLockMode();
+        setMode(mode === 'biometric' ? 'bio' : 'pin');
         setPinFallback(await hasPin());
         setLocked(true);
-        if (bio) void biometricAuth().then((ok) => { if (ok) setLocked(false); });
+        if (mode === 'biometric') void biometricAuth().then((ok) => { if (ok) setLocked(false); });
       }
     })();
     const sub = AppState.addEventListener('change', (st) => {
       if (st === 'background') {
-        // 审查修复(P3):与挂载自愈同口径——「已启用但无 PIN/无生物识别」的设置中途态不上锁,
+        // 与挂载自愈同口径:「已启用但无可用解锁方式」的设置中途态不上锁,
         // 否则切回前台会进入任意 PIN 可解的锁屏
         void isLockEnabled().then(async (on) => {
-          if (on && ((await hasPin()) || (await biometricAvailable()))) setLocked(true);
+          if (on && ((await activeLockMode()) === 'biometric' || (await hasPin()))) setLocked(true);
         });
       }
     });
@@ -2029,6 +2029,24 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
   const [pinSetup, setPinSetup] = useState(false);
   const [pinNew, setPinNew] = useState('');
   const [pinConfirm, setPinConfirm] = useState('');
+  // 应用锁设置面板:总开关状态 / 生效方式 / 生物识别硬件与用户开关 / PIN 存在与修改
+  const [lockOn, setLockOn] = useState(false);
+  const [lockMode, setLockMode] = useState<'pin' | 'biometric'>('pin');
+  const [bioAvail, setBioAvail] = useState(false);
+  const [bioOff, setBioOff] = useState(false);
+  const [pinExists, setPinExists] = useState(false);
+  const [pinMode, setPinMode] = useState<'setup' | 'change'>('setup');
+  const [pinOld, setPinOld] = useState('');
+
+  useEffect(() => {
+    void (async () => {
+      setLockOn(await isLockEnabled());
+      setBioAvail(await biometricAvailable());
+      setBioOff(await isBiometricDisabled());
+      setPinExists(await hasPin());
+      setLockMode(await activeLockMode());
+    })();
+  }, []);
 
   useEffect(() => {
     void initDb().then(async () => {
@@ -2155,21 +2173,53 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
       <Pressable style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12 }}
         onPress={() => {
           void (async () => {
-            if (await isLockEnabled()) { await disableLock(); setPinSetup(false); setMsg('应用锁已关闭'); }
-            else {
-              const kind = await enableLock();
-              if (kind === 'biometric') setMsg('应用锁已开启(面容/指纹)');
-              else { setPinSetup(true); return; } // 无生物识别 → 进入自设 PIN 流程,不再写默认 PIN
+            if (await isLockEnabled()) {
+              await disableLock(); setPinSetup(false); setLockOn(false); setMsg('应用锁已关闭');
+            } else {
+              await enableLock();
+              const mode = await activeLockMode();
+              setLockOn(true); setLockMode(mode);
+              if (mode === 'biometric') setMsg('应用锁已开启(面容/指纹),可在下方自由切换或关闭');
+              else { setPinMode('setup'); setPinSetup(true); return; } // 无生物识别 → 进入自设 PIN 流程
             }
-            setTimeout(() => setMsg(null), 2500);
+            setTimeout(() => setMsg(null), 3000);
           })();
         }}>
         <Text style={{ fontSize: 13, color: '#1a1c23' }}>🔒 应用锁(生物识别 / PIN)</Text>
-        <Text style={{ fontSize: 12, color: '#8a93a5' }}>点按开启/关闭</Text>
+        <Text style={{ fontSize: 12, color: lockOn ? '#1f9d6c' : '#8a93a5' }}>{lockOn ? `开启中(${lockMode === 'biometric' ? '指纹/面容' : 'PIN'})` : '点按开启'}</Text>
       </Pressable>
+      {lockOn && bioAvail && (
+        <Pressable style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12 }}
+          onPress={() => {
+            void (async () => {
+              if (!bioOff) {
+                await setBiometricDisabled(true); setBioOff(true); setLockMode('pin');
+                if (!(await hasPin())) { setPinMode('setup'); setPinSetup(true); }
+                setMsg('生物识别已关闭,改用 PIN 解锁');
+              } else {
+                await setBiometricDisabled(false); setBioOff(false); setLockMode('biometric');
+                setMsg('生物识别已开启,下次解锁生效');
+              }
+              setTimeout(() => setMsg(null), 3000);
+            })();
+          }}>
+          <Text style={{ fontSize: 13, color: '#1a1c23' }}>☝️ 生物识别(指纹/面容)</Text>
+          <Text style={{ fontSize: 12, color: bioOff ? '#8a93a5' : '#1f9d6c' }}>{bioOff ? '已关闭 · 用 PIN' : '已开启 · 点按关闭'}</Text>
+        </Pressable>
+      )}
+      {lockOn && (
+        <Pressable style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12 }}
+          onPress={() => { setPinMode(pinExists ? 'change' : 'setup'); setPinOld(''); setPinNew(''); setPinConfirm(''); setPinSetup(true); }}>
+          <Text style={{ fontSize: 13, color: '#1a1c23' }}>🔑 {pinExists ? '修改 PIN' : '设置 PIN'}</Text>
+          <Text style={{ fontSize: 12, color: '#8a93a5' }}>{pinExists ? '需验证当前 PIN' : '4–8 位数字'}</Text>
+        </Pressable>
+      )}
       {pinSetup && (
         <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 14, gap: 8 }}>
-          <Text style={{ fontSize: 13, fontWeight: '700', color: '#1a1c23' }}>设置应用锁 PIN(4–8 位数字)</Text>
+          <Text style={{ fontSize: 13, fontWeight: '700', color: '#1a1c23' }}>{pinMode === 'change' ? '修改 PIN' : '设置应用锁 PIN(4–8 位数字)'}</Text>
+          {pinMode === 'change' && (
+            <TextInput style={styles.input} value={pinOld} onChangeText={(t) => setPinOld(t.replace(/[^\d]/g, '').slice(0, 8))} keyboardType="number-pad" secureTextEntry placeholder="输入当前 PIN" placeholderTextColor="#b4bac6" />
+          )}
           <TextInput style={styles.input} value={pinNew} onChangeText={(t) => setPinNew(t.replace(/[^\d]/g, '').slice(0, 8))} keyboardType="number-pad" secureTextEntry placeholder="输入新 PIN" placeholderTextColor="#b4bac6" />
           <TextInput style={styles.input} value={pinConfirm} onChangeText={(t) => setPinConfirm(t.replace(/[^\d]/g, '').slice(0, 8))} keyboardType="number-pad" secureTextEntry placeholder="再次输入确认" placeholderTextColor="#b4bac6" />
           <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -2178,20 +2228,28 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
               disabled={pinNew.length < 4 || pinNew !== pinConfirm}
               onPress={() => {
                 void (async () => {
+                  if (pinMode === 'change') {
+                    const r = await verifyPin(pinOld);
+                    if (r === 'wrong') { setMsg('当前 PIN 错误'); setTimeout(() => setMsg(null), 2500); return; }
+                    if (r === 'locked') { setMsg('失败次数过多,请 60 秒后再试'); setTimeout(() => setMsg(null), 2500); return; }
+                  }
                   await setPin(pinNew);
-                  setPinSetup(false); setPinNew(''); setPinConfirm('');
-                  setMsg('应用锁已开启(PIN)');
+                  setPinSetup(false); setPinNew(''); setPinConfirm(''); setPinOld('');
+                  setPinExists(true); setLockMode('pin'); setLockOn(true);
+                  setMsg(pinMode === 'change' ? 'PIN 已修改' : '应用锁已开启(PIN)');
                   setTimeout(() => setMsg(null), 2500);
                 })();
               }}>
-              <Text style={{ fontSize: 13, color: pinNew.length >= 4 && pinNew === pinConfirm ? '#fff' : '#8a93a5' }}>确认开启</Text>
+              <Text style={{ fontSize: 13, color: pinNew.length >= 4 && pinNew === pinConfirm ? '#fff' : '#8a93a5' }}>确认</Text>
             </Pressable>
             <Pressable
               style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }}
               onPress={() => {
                 void (async () => {
-                  await disableLock(); // 未设完即取消:回滚开启状态,避免留下无口令的锁
-                  setPinSetup(false); setPinNew(''); setPinConfirm('');
+                  // 未设完即取消:仅在「开启流程中」回滚锁状态,避免留下无口令的锁;修改 PIN 的取消不动现有锁
+                  if (pinMode === 'setup' && !(await hasPin())) await disableLock();
+                  setLockOn(await isLockEnabled());
+                  setPinSetup(false); setPinNew(''); setPinConfirm(''); setPinOld('');
                 })();
               }}>
               <Text style={{ fontSize: 13, color: '#4a5160' }}>取消</Text>
@@ -2224,6 +2282,7 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
           <TextInput style={styles.input} value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" placeholder="you@example.com" placeholderTextColor="#b4bac6" />
           <Text style={styles.label}>密码</Text>
           <TextInput style={styles.input} value={password} onChangeText={setPassword} secureTextEntry placeholder="至少 8 位" placeholderTextColor="#b4bac6" />
+          {msg && <Text style={{ fontSize: 12, color: /失败|错误|不可达/.test(msg) ? '#d64545' : '#1f9d6c', marginTop: 4 }}>{msg}</Text>}
           <Pressable style={[styles.saveBtn, busy && styles.disabled]} onPress={() => void submit()}>
             <Text style={styles.saveText}>{busy ? '请稍候…' : '登录(无账号自动注册)'}</Text>
           </Pressable>
@@ -2239,7 +2298,6 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
           </Pressable>
         </>
       )}
-      {msg && <Text style={styles.msg}>{msg}</Text>}
     </ScrollView>
   );
 }

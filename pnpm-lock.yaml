@@ -7,6 +7,9 @@ settings:
 overrides:
   esbuild: 0.25.4
 
+patchedDependencies:
+  expo-modules-core@57.0.19: 19b057d20b7f34df7a0c0e667d0252627923f2c4b282055068e5a616de8d0cb1
+
 importers:
 
   .:
@@ -5960,7 +5963,7 @@ snapshots:
       - supports-color
       - typescript
 
-  expo-modules-core@57.0.19(react-native@0.86.3(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3):
+  expo-modules-core@57.0.19(patch_hash=19b057d20b7f34df7a0c0e667d0252627923f2c4b282055068e5a616de8d0cb1)(react-native@0.86.3(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3):
     dependencies:
       '@expo/expo-modules-macros-plugin': 0.6.1
       expo-modules-jsi: 57.1.1(react-native@0.86.3(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.2.3))
@@ -5968,7 +5971,7 @@ snapshots:
       react: 19.2.3
       react-native: 0.86.3(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.2.3)
 
-  expo-modules-core@57.0.19(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.3.0))(react@19.3.0):
+  expo-modules-core@57.0.19(patch_hash=19b057d20b7f34df7a0c0e667d0252627923f2c4b282055068e5a616de8d0cb1)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.3.0))(react@19.3.0):
     dependencies:
       '@expo/expo-modules-macros-plugin': 0.6.1
       expo-modules-jsi: 57.1.1(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.3.0))
@@ -6033,7 +6036,7 @@ snapshots:
       expo-font: 57.0.4(expo@57.0.25)(react-native@0.86.3(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)
       expo-keep-awake: 57.0.2(expo@57.0.25)(react@19.2.3)
       expo-modules-autolinking: 57.0.13(typescript@5.7.3)
-      expo-modules-core: 57.0.19(react-native@0.86.3(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)
+      expo-modules-core: 57.0.19(patch_hash=19b057d20b7f34df7a0c0e667d0252627923f2c4b282055068e5a616de8d0cb1)(react-native@0.86.3(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)
       pretty-format: 29.7.0
       react: 19.2.3
       react-native: 0.86.3(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.2.3)
@@ -6073,7 +6076,7 @@ snapshots:
       expo-font: 57.0.4(expo@57.0.25)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.3.0))(react@19.3.0)
       expo-keep-awake: 57.0.2(expo@57.0.25)(react@19.3.0)
       expo-modules-autolinking: 57.0.13(typescript@5.7.3)
-      expo-modules-core: 57.0.19(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.3.0))(react@19.3.0)
+      expo-modules-core: 57.0.19(patch_hash=19b057d20b7f34df7a0c0e667d0252627923f2c4b282055068e5a616de8d0cb1)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.3.0))(react@19.3.0)
       pretty-format: 29.7.0
       react: 19.3.0
       react-native: 0.87.1(@babel/core@7.29.7)(@types/react@19.2.18)(react@19.3.0)
