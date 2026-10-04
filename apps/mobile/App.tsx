@@ -1169,6 +1169,7 @@ const PAGE = 50;
 
 function ListScreen({ drillCat, onClearDrill }: { drillCat: string | null; onClearDrill: () => void }) {
   const [rows, setRows] = useState<Array<TransactionRow & { cat_name?: string; cat_icon?: string }>>([]);
+  const [listErr, setListErr] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
   const [monthOffset, setMonthOffset] = useState(0);
   const [typeFilter, setTypeFilter] = useState<'all' | 'expense' | 'income'>('all');
@@ -1223,20 +1224,30 @@ function ListScreen({ drillCat, onClearDrill }: { drillCat: string | null; onCle
       if (dateTo) { clauses.push('t.happened_at < ?'); params.push(new Date(dateTo).getTime() + 86_399_000); }
       if (drillCat) { clauses.push('t.category_id = ?'); params.push(drillCat); }
       const where = clauses.join(' AND ');
-      const got = await db.getAllAsync<TransactionRow>(
-        `SELECT t.* FROM transactions t WHERE ${where}
-         ORDER BY t.happened_at DESC LIMIT ? OFFSET ?`,
-        [...params, off, PAGE],
-      );
+      // 真机 SQLCipher 对「ORDER BY + LIMIT/OFFSET」分页形状会返回空(汇总同 WHERE 却有数;
+      // 上轮 JOIN 同类问题),改为 WHERE 下推 + JS 层排序分页;查询异常显式展示,不再静默空白
+      let got: TransactionRow[];
+      try {
+        got = await db.getAllAsync<TransactionRow>(
+          `SELECT t.* FROM transactions t WHERE ${where}`,
+          params,
+        );
+      } catch (e) {
+        setListErr(e instanceof Error ? e.message : String(e));
+        return;
+      }
+      setListErr(null);
+      got.sort((a, b) => Number(b.happened_at) - Number(a.happened_at));
+      const page = got.slice(off, off + PAGE);
       const catRows = await db.getAllAsync<{ id: string; name: string; icon: string }>(
         'SELECT id, name, icon FROM categories WHERE is_deleted = 0 AND ledger_id = ?', [ledgerId]);
       const catMap = new Map(catRows.map((c) => [c.id, c]));
-      const withCat = got.map((t) => {
+      const withCat = page.map((t) => {
         const c = t.category_id ? catMap.get(String(t.category_id)) : undefined;
         return { ...t, cat_name: c?.name, cat_icon: c?.icon };
       });
       setRows((prev) => (replace ? withCat : [...prev, ...withCat]));
-      setHasMore(got.length === PAGE);
+      setHasMore(off + PAGE < got.length);
       if (!recycled) {
         const sums = await db.getAllAsync<{ type: string; s: number }>(
           `SELECT type, SUM(CAST(amount AS REAL)) AS s FROM transactions t WHERE ${where} GROUP BY type`, params);
@@ -1358,7 +1369,7 @@ function ListScreen({ drillCat, onClearDrill }: { drillCat: string | null; onCle
             )}
           </Pressable>
         ))}
-        {rows.length === 0 && !busy && <Text style={styles.muted}>本月暂无流水</Text>}
+        {rows.length === 0 && !busy && <Text style={listErr ? { color: '#d64545', fontSize: 12 } : styles.muted}>{listErr ? `列表查询失败:${listErr}` : '本月暂无流水'}</Text>}
         {hasMore && (
           <Pressable style={{ alignItems: 'center', padding: 10 }} onPress={() => { const n = offset + PAGE; setOffset(n); void load(n, false); }}>
             <Text style={{ color: '#4361ee', fontSize: 13 }}>加载更多</Text>
