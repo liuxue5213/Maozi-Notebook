@@ -5,6 +5,7 @@ import { sql } from 'drizzle-orm';
 import { db } from './db/db';
 import { AuthModule } from './auth/auth.module';
 import { LedgerModule } from './ledgers/ledger.module';
+import { AiModule } from './ai/ai.module';
 import { SyncModule } from './sync/sync.module';
 import { AllExceptionsFilter } from './common/errors';
 
@@ -33,7 +34,7 @@ export class HealthController {
   // F-07:全局兜底 100 次/分钟/IP;敏感路由在各自 Controller 上有更严格的 @Throttle
   imports: [
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
-    AuthModule, SyncModule, LedgerModule,
+    AuthModule, SyncModule, LedgerModule, AiModule,
   ],
   controllers: [HealthController],
   providers: [
