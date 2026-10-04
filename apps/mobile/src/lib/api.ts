@@ -116,6 +116,9 @@ export async function logout(): Promise<void> {
   await clearSession();
 }
 
+export const aiParse = (text: string, categories: string[]) =>
+  apiFetch('/v1/ai/parse', { method: 'POST', body: JSON.stringify({ text, categories }) }) as unknown as Promise<{ amount: number; type: 'expense' | 'income'; category: string | null; note: string; day: number | null }>;
+
 export const aiInsights = (body: Record<string, unknown>) =>
   apiFetch('/v1/ai/insights', { method: 'POST', body: JSON.stringify(body) }) as unknown as Promise<{ text: string }>;
 

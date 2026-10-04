@@ -14,7 +14,7 @@ import { initDb, resetInitCache, createLedgerWithSeed, listRecent, saveTx, topCa
 import { clearSession as clearSessionLocal } from './src/lib/api';
 import { resetLocalDatabase } from './src/lib/db';
 import { prepareAfterLogin, saveLocal } from '@ledgerone/sqlite-sync';
-import { authApi, aiInsights, clearSession, getServerUrl, isLoggedIn, logout as logoutAll, saveSession, setServerUrl, SERVER_PRESETS, resolveServerUrl } from './src/lib/api';
+import { authApi, aiInsights, aiParse, clearSession, getServerUrl, isLoggedIn, logout as logoutAll, saveSession, setServerUrl, SERVER_PRESETS, resolveServerUrl } from './src/lib/api';
 
 type Tab = 'record' | 'list' | 'report' | 'me';
 
@@ -891,6 +891,9 @@ function RecordScreen({ onSaved }: { onSaved: () => void }) {
   const [fromAcc, setFromAcc] = useState<string | null>(null);
   const [toAcc, setToAcc] = useState<string | null>(null);
   const [tpls, setTpls] = useState<Array<Tpl>>([]);
+  const [note, setNote] = useState('');
+  const [aiTxt, setAiTxt] = useState('');
+  const [aiBusyN, setAiBusyN] = useState(false);
 
   const refreshAccounts = async () => {
     const ledgerId = await getActiveLedgerId();
@@ -963,6 +966,7 @@ function RecordScreen({ onSaved }: { onSaved: () => void }) {
     scheduleSync();
     setAmount('');
     setSelected(null);
+    setNote('');
     setMsg(`已记入 ¥${v.toFixed(2)}`);
     onSaved();
     setTimeout(() => setMsg(null), 1800);
@@ -987,6 +991,65 @@ function RecordScreen({ onSaved }: { onSaved: () => void }) {
         placeholder="0.00"
         placeholderTextColor="#b4bac6"
       />
+      <TextInput style={styles.input} value={note} onChangeText={(t) => setNote(t.slice(0, 500))} placeholder="备注(可选,如 打车/工资)" placeholderTextColor="#b4bac6" />
+      <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+        <TextInput
+          style={{ ...styles.input, flex: 1 }}
+          value={aiTxt}
+          onChangeText={(t) => setAiTxt(t.slice(0, 200))}
+          placeholder="🤖 文字记账:如「昨天打车25块」"
+          placeholderTextColor="#b4bac6"
+          onSubmitEditing={() => {
+            void (async () => {
+              if (!aiTxt.trim() || aiBusyN) return;
+              setAiBusyN(true);
+              try {
+                await initDb();
+                const ledgerId = await getActiveLedgerId();
+                const cats = await db.getAllAsync<{ id: string; name: string }>('SELECT id, name FROM categories WHERE is_deleted = 0 AND ledger_id = ?', [ledgerId]);
+                const r = await aiParse(aiTxt.trim(), cats.map((c) => c.name));
+                setAmount(String(r.amount));
+                setType(r.type);
+                const match = cats.find((c) => c.name === r.category);
+                if (match) setSelected(match.id);
+                setNote(r.note);
+                if (r.day) { /* day 不改当前选中日期,仅提示 */ }
+                setAiTxt('');
+                setMsg(`AI 已解析 ¥${r.amount}${r.category ? ` · ${r.category}` : ''},请确认后保存`);
+                setTimeout(() => setMsg(null), 2500);
+              } catch (e) {
+                setMsg(`AI 解析失败:${e instanceof Error ? e.message : String(e)}`);
+                setTimeout(() => setMsg(null), 3000);
+              } finally { setAiBusyN(false); }
+            })();
+          }}
+        />
+        <Pressable style={{ ...styles.saveBtn, paddingHorizontal: 12, ...(aiBusyN && styles.disabled) }} onPress={() => {
+          void (async () => {
+            if (!aiTxt.trim() || aiBusyN) return;
+            setAiBusyN(true);
+            try {
+              await initDb();
+              const ledgerId = await getActiveLedgerId();
+              const cats = await db.getAllAsync<{ id: string; name: string }>('SELECT id, name FROM categories WHERE is_deleted = 0 AND ledger_id = ?', [ledgerId]);
+              const r = await aiParse(aiTxt.trim(), cats.map((c) => c.name));
+              setAmount(String(r.amount));
+              setType(r.type);
+              const match = cats.find((c) => c.name === r.category);
+              if (match) setSelected(match.id);
+              setNote(r.note);
+              setAiTxt('');
+              setMsg(`AI 已解析 ¥${r.amount}${r.category ? ` · ${r.category}` : ''},请确认后保存`);
+              setTimeout(() => setMsg(null), 2500);
+            } catch (e) {
+              setMsg(`AI 解析失败:${e instanceof Error ? e.message : String(e)}`);
+              setTimeout(() => setMsg(null), 3000);
+            } finally { setAiBusyN(false); }
+          })();
+        }}>
+          <Text style={styles.saveText}>解析</Text>
+        </Pressable>
+      </View>
       {tpls.length > 0 && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 8 }} contentContainerStyle={{ gap: 6 }}>
           {tpls.map((t) => (

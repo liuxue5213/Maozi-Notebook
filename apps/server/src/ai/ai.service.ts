@@ -54,4 +54,25 @@ export class AiService {
     ].filter(Boolean);
     return this.chat(lines.join('\n'));
   }
+  /** 智能记账解析:自然语言 → 结构化记账信息(金额/类型/分类/备注/日) */
+  async parseExpense(text: string, categoryNames: string[]): Promise<{ amount: number; type: 'expense' | 'income'; category: string | null; note: string; day: number | null }> {
+    const system = [
+      '你是记账解析器。从文本中提取一条记账信息,只输出 JSON(无其它文字):',
+      '{"amount": number, "type": "expense"|"income", "category": string|null, "note": string, "day": number|null}',
+      `分类必须从以下列表中选(找不到合适就 null): ${categoryNames.join('、')}`,
+      'day 是本月几号(未提及则 null)。示例:「昨天打车25块」→ {"amount":25,"type":"expense","category":"交通","note":"打车","day":null}',
+    ].join('\n');
+    const raw = await this.chat(text, system);
+    const m = raw.match(/\{[\s\S]*\}/);
+    if (!m) throw new Error('AI 未返回有效 JSON');
+    const j = JSON.parse(m[0]) as { amount?: number; type?: string; category?: string | null; note?: string; day?: number | null };
+    if (typeof j.amount !== 'number' || j.amount <= 0) throw new Error('未能解析出金额');
+    return {
+      amount: j.amount,
+      type: j.type === 'income' ? 'income' : 'expense',
+      category: typeof j.category === 'string' ? j.category : null,
+      note: typeof j.note === 'string' ? j.note : text,
+      day: typeof j.day === 'number' ? j.day : null,
+    };
+  }
 }

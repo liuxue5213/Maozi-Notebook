@@ -26,6 +26,15 @@ export class AiController {
     return { text: await this.ai.analyzeSpending(body as never) };
   }
 
+  /** 智能记账解析:自然语言 → 结构化(T-38 替代方案,无语音) */
+  @Post('v1/ai/parse')
+  async parse(@Req() _req: AuthedRequest, @Body() body: { text?: string; categories?: string[] }) {
+    const text = (body?.text ?? '').slice(0, 500);
+    const categories = Array.isArray(body?.categories) ? body.categories.slice(0, 60).map(String) : [];
+    if (!text.trim()) throw new Error('text 为空');
+    return this.ai.parseExpense(text, categories);
+  }
+
   /** 通用 AI 问答(预留智能记账/语音解析) */
   @Post('v1/ai/chat')
   async chat(@Req() _req: AuthedRequest, @Body() body: { content?: string }) {
