@@ -1137,7 +1137,7 @@ function ListScreen({ drillCat, onClearDrill }: { drillCat: string | null; onCle
       const params: Array<string | number> = [ledgerId];
       if (!recycled) { clauses.push('t.happened_at >= ?', 't.happened_at < ?'); params.push(mr.start, mr.end); }
       if (typeFilter !== 'all') { clauses.push('t.type = ?'); params.push(typeFilter); }
-      if (kw.trim()) { clauses.push('(t.note LIKE ? OR c.name LIKE ?)'); params.push(`%${kw.trim()}%`, `%${kw.trim()}%`); }
+      if (kw.trim()) { clauses.push('(t.note LIKE ? OR EXISTS (SELECT 1 FROM categories cx WHERE cx.id = t.category_id AND cx.name LIKE ?))'); params.push(`%${kw.trim()}%`, `%${kw.trim()}%`); }
       if (minAmt) { clauses.push('CAST(t.amount AS REAL) >= ?'); params.push(Number(minAmt)); }
       if (maxAmt) { clauses.push('CAST(t.amount AS REAL) <= ?'); params.push(Number(maxAmt)); }
       if (accFilter !== 'all') { clauses.push('(t.account_id = ? OR t.to_account_id = ?)'); params.push(accFilter, accFilter); }
@@ -1145,13 +1145,19 @@ function ListScreen({ drillCat, onClearDrill }: { drillCat: string | null; onCle
       if (dateTo) { clauses.push('t.happened_at < ?'); params.push(new Date(dateTo).getTime() + 86_399_000); }
       if (drillCat) { clauses.push('t.category_id = ?'); params.push(drillCat); }
       const where = clauses.join(' AND ');
-      const got = await db.getAllAsync<TransactionRow & { cat_name?: string; cat_icon?: string }>(
-        `SELECT t.*, c.name AS cat_name, c.icon AS cat_icon FROM transactions t
-         LEFT JOIN categories c ON t.category_id = c.id WHERE ${where}
+      const got = await db.getAllAsync<TransactionRow>(
+        `SELECT t.* FROM transactions t WHERE ${where}
          ORDER BY t.happened_at DESC LIMIT ? OFFSET ?`,
         [...params, off, PAGE],
       );
-      setRows((prev) => (replace ? got : [...prev, ...got]));
+      const catRows = await db.getAllAsync<{ id: string; name: string; icon: string }>(
+        'SELECT id, name, icon FROM categories WHERE is_deleted = 0 AND ledger_id = ?', [ledgerId]);
+      const catMap = new Map(catRows.map((c) => [c.id, c]));
+      const withCat = got.map((t) => {
+        const c = t.category_id ? catMap.get(String(t.category_id)) : undefined;
+        return { ...t, cat_name: c?.name, cat_icon: c?.icon };
+      });
+      setRows((prev) => (replace ? withCat : [...prev, ...withCat]));
       setHasMore(got.length === PAGE);
       if (!recycled) {
         const sums = await db.getAllAsync<{ type: string; s: number }>(
@@ -1251,7 +1257,12 @@ function ListScreen({ drillCat, onClearDrill }: { drillCat: string | null; onCle
         </ScrollView>
       )}
       {view !== 'calendar' && (
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.list}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.list}
+        scrollEventThrottle={200}
+        onScroll={(e) => {
+          const { y, ch, chh } = { y: e.nativeEvent.contentOffset.y, ch: e.nativeEvent.layoutMeasurement.height, chh: e.nativeEvent.contentSize.height };
+          if (hasMore && !busy && y + ch >= chh - 240) { const n = offset + PAGE; setOffset(n); void load(n, false); }
+        }}>
         {rows.map((t) => (
           <Pressable key={t.id} style={styles.txRow} onPress={() => { setEditRow(t); setEditAmount(String(t.amount)); setEditNote(String(t.note ?? '')); }}>
             <View style={styles.txMain}>
