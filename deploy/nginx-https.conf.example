@@ -1,0 +1,78 @@
+# ============================================================================
+# LedgerOne 树莓派端 nginx HTTPS 反代配置模板(T-05)
+#
+# 拓扑:手机/浏览器 → frp(公网 43.138.212.106:55505 纯 TCP 隧道)→ 树莓派 60505
+# frp 只做 TCP 转发、不解密,因此 TLS 在树莓派 nginx 终结 —— 证书与私钥不出内网,
+# 公网隧道里传输的全程是密文(端到端加密,最专业的放法)。
+#
+# 使用步骤(详见 deploy/README-HTTPS.md):
+#   1. 域名 A 记录指向 43.138.212.106
+#   2. 树莓派上用 certbot DNS 验证签发证书(公网 55505 是 frp 占用的 TCP 口,
+#      HTTP-01 验证走不通;推荐 `--preferred-challenges dns`)
+#   3. 把本文件中 <你的域名> 与证书路径替换后,覆盖 nginx 对应 server 块
+#   4. nginx -t && systemctl reload nginx
+#   5. 移动端 apps/mobile/src/lib/api.ts 预设改为 https://<你的域名>:55505 重新出包
+# ============================================================================
+
+# ---- API 同步服务:原 60505 明文端口升级为 TLS ----
+# 注:http2 写在 listen 行内,兼容 nginx 1.18+(树莓派 OS 仓库版本);1.25.1+ 也可用 `http2 on;` 指令
+server {
+    listen 60505 ssl http2;
+    server_name <你的域名>;
+
+    ssl_certificate     /etc/letsencrypt/live/<你的域名>/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/<你的域名>/privkey.pem;
+
+    # TLS 基线(2026 口径):仅 TLS 1.2/1.3 + 强套件,禁旧协议
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache   shared:API_SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # HSTS:客户端此后强制走 HTTPS(确认 HTTPS 稳定后再加,先注释掉避免锁死)
+    #add_header Strict-Transport-Security "max-age=31536000" always;
+
+    # 同步 API(nestjs 监听 127.0.0.1:3000,按实际后端端口调整)
+    location / {
+        proxy_pass         http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto https;
+        proxy_read_timeout 75s;   # 同步批量 pull 可能超过默认 60s
+        client_max_body_size 20m; # 死信/附件批量上传
+    }
+}
+
+# ---- Web 静态资源:60500 同样升级(可选,建议同步做) ----
+server {
+    listen 60500 ssl http2;
+    server_name <你的域名>;
+
+    ssl_certificate     /etc/letsencrypt/live/<你的域名>/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/<你的域名>/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    root /var/www/ledgerone;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;  # SPA 路由回退
+    }
+
+    # 静态资源安全头
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+}
+
+# ---- 迁移期兜底:保留 60506 明文端口,仅做 301 跳转到 HTTPS(老客户端逐步过渡) ----
+# 需在 frp 中新增转发:公网 55506 → 树莓派 60506
+server {
+    listen 60506;
+    server_name <你的域名>;
+    return 301 https://$host:55505$request_uri;
+}
