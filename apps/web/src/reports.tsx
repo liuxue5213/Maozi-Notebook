@@ -19,11 +19,24 @@ export function Reports() {
   const [period, setPeriod] = useState<PeriodKind>('month');
   const [kind, setKind] = useState<'expense' | 'income'>('expense');
   const [drillId, setDrillId] = useState<string | null>(null);
+  const [aiText, setAiText] = useState('');
+  const [aiBusy, setAiBusy] = useState(false);
 
   const model = useLiveQuery(() => loadReportModel(period, kind), [period, kind]);
 
   if (!model) return <div className="muted loading">加载中…</div>;
 
+  const runAi = async () => {
+    setAiBusy(true); setAiText('');
+    try {
+      const { aiInsights } = await import('./sync/api');
+      const top = [...model.byTop.entries()].slice(0, 10).map(([id, v]) => ({ name: model.catMap.get(id)?.name ?? id, amount: String(v.amount) }));
+      const r = await aiInsights({ month: `${periodLabel}(${period})`, income: model.income, expense: model.expense, budget: null, topCategories: top, recentTxs: [] });
+      setAiText(r.text);
+    } catch (e) {
+      setAiText(`分析失败:${e instanceof Error ? e.message : String(e)}`);
+    } finally { setAiBusy(false); }
+  };
   const periodLabel = PERIODS.find((p) => p.key === period)?.label ?? '';
   const balance = subAmount(model.income, model.expense);
   const items = [...model.byTop.entries()]
@@ -61,6 +74,10 @@ export function Reports() {
           <div className="label">结余</div>
           <div className={`num ${Number(balance) >= 0 ? 'income' : 'expense'}`}>{cur()}{formatAmount(balance)}</div>
         </div>
+        <button className="primary slim-btn" style={{ marginTop: 8 }} disabled={aiBusy} onClick={() => void runAi()}>
+          {aiBusy ? '🤖 分析中…' : '🤖 AI 分析本期数据'}
+        </button>
+        {aiText && <div className="me-section" style={{ whiteSpace: 'pre-wrap', fontSize: 13 }}>{aiText}</div>}
       </div>
 
       {model.forecast && (model.forecast.predicted > 0 || model.forecast.sampleMonths > 0) && (

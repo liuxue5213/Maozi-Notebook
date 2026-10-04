@@ -14,7 +14,7 @@ import { initDb, resetInitCache, createLedgerWithSeed, listRecent, saveTx, topCa
 import { clearSession as clearSessionLocal } from './src/lib/api';
 import { resetLocalDatabase } from './src/lib/db';
 import { prepareAfterLogin, saveLocal } from '@ledgerone/sqlite-sync';
-import { authApi, clearSession, getServerUrl, isLoggedIn, logout as logoutAll, saveSession, setServerUrl, SERVER_PRESETS, resolveServerUrl } from './src/lib/api';
+import { authApi, aiInsights, clearSession, getServerUrl, isLoggedIn, logout as logoutAll, saveSession, setServerUrl, SERVER_PRESETS, resolveServerUrl } from './src/lib/api';
 
 type Tab = 'record' | 'list' | 'report' | 'me';
 
@@ -1334,6 +1334,8 @@ function ListScreen({ drillCat, onClearDrill }: { drillCat: string | null; onCle
 }
 
 function ReportScreen({ onDrill }: { onDrill: (catId: string) => void }) {
+  const [aiText, setAiText] = useState('');
+  const [aiBusy, setAiBusy] = useState(false);
   const [monthOffset, setMonthOffset] = useState(0);
   const [sum, setSum] = useState({ income: 0, expense: 0 });
   const [byCat, setByCat] = useState<Array<{ name: string; icon: string; total: number; pct: number; catId: string | null }>>([]);
@@ -1395,7 +1397,29 @@ function ReportScreen({ onDrill }: { onDrill: (catId: string) => void }) {
           </Text>
         </View>
         <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 14 }}>
-          <Text style={{ fontSize: 13, fontWeight: '700', color: '#1a1c23', marginBottom: 10 }}>支出分类排行 Top10</Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <Text style={{ fontSize: 13, fontWeight: '700', color: '#1a1c23' }}>支出分类排行 Top10</Text>
+            <Pressable style={{ backgroundColor: '#eef0f6', borderRadius: 8, paddingVertical: 4, paddingHorizontal: 8 }}
+              onPress={() => {
+                setAiBusy(true); setAiText('');
+                void (async () => {
+                  try {
+                    const r = await aiInsights({
+                      month: monthOffset === 0 ? '本月' : mr.label,
+                      income: String(sum.income), expense: String(sum.expense),
+                      budget: null,
+                      topCategories: byCat.slice(0, 10).map((c) => ({ name: c.name, amount: String(c.total) })),
+                      recentTxs: [],
+                    });
+                    setAiText(r.text);
+                  } catch (e) { setAiText(`分析失败:${e instanceof Error ? e.message : String(e)}`); }
+                  finally { setAiBusy(false); }
+                })();
+              }}>
+              <Text style={{ fontSize: 12, color: '#4361ee' }}>{aiBusy ? '分析中…' : '🤖 AI 分析'}</Text>
+            </Pressable>
+          </View>
+          {aiText && <Text style={{ fontSize: 12, color: '#1a1c23', lineHeight: 18, marginBottom: 10, backgroundColor: '#f6f7ff', borderRadius: 8, padding: 8 }}>{aiText}</Text>}
           {byCat.length === 0 && <Text style={{ color: '#8a93a5', fontSize: 12 }}>本月暂无支出</Text>}
           {byCat.map((c, i) => (
             <Pressable key={c.name + i} style={{ marginBottom: 10 }} onPress={() => onDrill(String(c.catId ?? ''))}>

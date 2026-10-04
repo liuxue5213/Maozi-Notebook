@@ -116,6 +116,9 @@ export async function logout(): Promise<void> {
   await clearSession();
 }
 
+export const aiInsights = (body: Record<string, unknown>) =>
+  apiFetch('/v1/ai/insights', { method: 'POST', body: JSON.stringify(body) }) as unknown as Promise<{ text: string }>;
+
 export const authApi = {
   login: (email: string, password: string) => auth.login(email, password),
   register: (email: string, password: string) => auth.register(email, password),
@@ -123,6 +126,7 @@ export const authApi = {
   me: auth.me as () => Promise<Record<string, unknown>>,
   updateMe: (body: { nickname?: string; base_currency?: string }) =>
     apiFetch('/v1/users/me', { method: 'PATCH', body: JSON.stringify(body) }) as unknown as Promise<Record<string, unknown>>,
+
   deleteMe: async (password: string) => {
     await apiFetch('/v1/users/me', { method: 'DELETE', body: JSON.stringify({ password }) });
   },

@@ -128,3 +128,20 @@ export const authApi = {
   /** 注销账号(P0-6,第 28 轮) */
   deleteMe: client.auth.deleteMe as (password: string) => Promise<{ deleted: true }>,
 };
+
+/** AI 消费洞察(百炼 qwen-plus,服务端代理) */
+export async function aiInsights(body: {
+  month: string; income: string; expense: string; budget?: string | null;
+  topCategories: Array<{ name: string; amount: string }>;
+  recentTxs: Array<{ note: string; amount: string; date: string }>;
+  question?: string;
+}): Promise<{ text: string }> {
+  const token = localStorage.getItem(ACCESS_KEY);
+  const res = await fetch(`${getServerBase()}/v1/ai/insights`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`AI 分析失败 ${res.status}`);
+  return res.json() as Promise<{ text: string }>;
+}
