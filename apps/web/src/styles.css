@@ -1725,6 +1725,44 @@ button.mini {
   border-color: var(--primary);
 }
 
+/* ---------- AI 文字记账(T-41,与移动端同交互) ---------- */
+.ai-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.ai-input {
+  flex: 1;
+  padding: 10px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  font-size: 13px;
+  background: var(--input-bg);
+  color: var(--text);
+}
+
+.ai-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.ai-btn {
+  padding: 10px 14px;
+  border: none;
+  border-radius: 12px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ai-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .pending-row .note-input {
   margin-bottom: 10px;
 }

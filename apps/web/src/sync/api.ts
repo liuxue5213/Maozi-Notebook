@@ -129,19 +129,38 @@ export const authApi = {
   deleteMe: client.auth.deleteMe as (password: string) => Promise<{ deleted: true }>,
 };
 
-/** AI 消费洞察(百炼 qwen-plus,服务端代理) */
+function aiErrorMessage(e: unknown, feature: string): Error {
+  if (e instanceof ApiError) {
+    if (e.status === 401) return new Error(`${feature}需登录后使用`);
+    if (e.status === 429) return new Error('今日 AI 次数已达上限,明天再来吧');
+    return new Error(e.message);
+  }
+  return e instanceof Error ? e : new Error(String(e));
+}
+
+/** AI 消费洞察(百炼 qwen-plus,服务端代理;走共享 apiFetch 获得 401 自动刷新) */
 export async function aiInsights(body: {
   month: string; income: string; expense: string; budget?: string | null;
   topCategories: Array<{ name: string; amount: string }>;
   recentTxs: Array<{ note: string; amount: string; date: string }>;
   question?: string;
 }): Promise<{ text: string }> {
-  const token = localStorage.getItem(ACCESS_KEY);
-  const res = await fetch(`${getServerBase()}/v1/ai/insights`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`AI 分析失败 ${res.status}`);
-  return res.json() as Promise<{ text: string }>;
+  try {
+    return await apiFetch('/v1/ai/insights', { method: 'POST', body: JSON.stringify(body) }) as unknown as { text: string };
+  } catch (e) {
+    throw aiErrorMessage(e, 'AI 分析');
+  }
+}
+
+/** AI 文字记账解析(T-41:与移动端同交互——预填后由用户确认保存;走共享 apiFetch 获得 401 自动刷新) */
+export async function aiParse(text: string, categories: string[]): Promise<{
+  amount: number; type: 'expense' | 'income'; category: string | null; note: string; day: number | null;
+}> {
+  try {
+    return await apiFetch('/v1/ai/parse', { method: 'POST', body: JSON.stringify({ text, categories }) }) as unknown as {
+      amount: number; type: 'expense' | 'income'; category: string | null; note: string; day: number | null;
+    };
+  } catch (e) {
+    throw aiErrorMessage(e, '文字记账');
+  }
 }

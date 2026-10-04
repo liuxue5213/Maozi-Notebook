@@ -10,6 +10,7 @@ import { CategoryPanel } from './categories';
 import { SettingsPage } from './settings';
 import { PendingPage } from './pending';
 import { RecurringPage } from './recurring';
+import { SavingsPage } from './savings';
 import { applyTheme, cycleTheme, getThemeMode, type ThemeMode } from './theme';
 import { db } from './db/db';
 
@@ -93,7 +94,7 @@ export function AuthModal({ onClose, onAuthed }: { onClose: () => void; onAuthed
 export function MeTab({ onOpenAuth, onAuthChanged }: { onOpenAuth: () => void; onAuthChanged: () => void }) {
   const sync = useSyncExternalStore(engine.subscribe, engine.getSnapshot);
   const [email, setEmail] = useState<string | null>(null);
-  const [view, setView] = useState<'menu' | 'accounts' | 'export' | 'security' | 'pending' | 'recurring' | 'ledgers' | 'categories' | 'settings'>('menu');
+  const [view, setView] = useState<'menu' | 'accounts' | 'export' | 'security' | 'pending' | 'recurring' | 'ledgers' | 'categories' | 'savings' | 'settings'>('menu');
   const [pendingCount, setPendingCount] = useState(0);
   const [theme, setTheme] = useState<ThemeMode>(() => getThemeMode());
 
@@ -147,6 +148,7 @@ export function MeTab({ onOpenAuth, onAuthChanged }: { onOpenAuth: () => void; o
   if (view === 'security') return <SecurityPanel onBack={() => setView('menu')} />;
   if (view === 'pending') return <PendingPage onBack={() => setView('menu')} />;
   if (view === 'recurring') return <RecurringPage onBack={() => setView('menu')} />;
+  if (view === 'savings') return <SavingsPage onBack={() => setView('menu')} />;
 
   return (
     <div className="me-tab">
@@ -163,6 +165,10 @@ export function MeTab({ onOpenAuth, onAuthChanged }: { onOpenAuth: () => void; o
             <button className="me-row link-row" onClick={() => setView('pending')}>
               <span>待确认池 📥</span>
               <span className="muted">{pendingCount > 0 ? `${pendingCount} 条待确认 ›` : '导入账单 ›'}</span>
+            </button>
+            <button className="me-row link-row" onClick={() => setView('savings')}>
+              <span>存钱计划 🐷</span>
+              <span className="muted">目标 · 净结余进度 ›</span>
             </button>
             <button className="me-row link-row" onClick={() => setView('ledgers')}>
               <span>账本管理 📚</span>
@@ -227,6 +233,10 @@ export function MeTab({ onOpenAuth, onAuthChanged }: { onOpenAuth: () => void; o
             <button className="me-row link-row" onClick={() => setView('pending')}>
               <span>待确认池 📥</span>
               <span className="muted">{pendingCount > 0 ? `${pendingCount} 条待确认 ›` : '导入账单 ›'}</span>
+            </button>
+            <button className="me-row link-row" onClick={() => setView('savings')}>
+              <span>存钱计划 🐷</span>
+              <span className="muted">目标 · 净结余进度 ›</span>
             </button>
             <button className="me-row link-row" onClick={() => setView('ledgers')}>
               <span>账本管理 📚</span>

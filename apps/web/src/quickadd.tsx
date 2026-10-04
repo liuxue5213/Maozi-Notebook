@@ -7,7 +7,7 @@ import {
 } from '@ledgerone/domain';
 import { db } from './db/db';
 import { getActiveLedgerId } from './db/seed';
-import { getBaseCurrency } from './sync/api';
+import { aiParse, getBaseCurrency } from './sync/api';
 import { saveLocal } from './sync/wiring';
 import { getUserId } from './sync/api';
 import { evaluateExpression } from './calc/evaluator';
@@ -48,6 +48,8 @@ export function QuickAdd({ onNeedAuth }: { onNeedAuth?: () => void }) {
   const [fromAccount, setFromAccount] = useState<string>('');
   const [toAccount, setToAccount] = useState<string>('');
   const [note, setNote] = useState('');
+  const [aiTxt, setAiTxt] = useState('');
+  const [aiBusy, setAiBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [freqTick, setFreqTick] = useState(0);
   const [voiceOpen, setVoiceOpen] = useState(false);
@@ -106,6 +108,38 @@ export function QuickAdd({ onNeedAuth }: { onNeedAuth?: () => void }) {
     const seg = expr.split(/[+\-×÷]/).pop() ?? '';
     if (seg.replace('.', '').length >= 12) return;
     setExpr((e) => e + k);
+  };
+
+  // T-41:AI 文字记账(与移动端同交互)——一句话调 /v1/ai/parse,结果仅预填,用户确认后保存
+  const runAiParse = () => {
+    const text = aiTxt.trim();
+    if (!text || aiBusy) return;
+    setAiBusy(true);
+    void (async () => {
+      try {
+        const ledgerId = await getActiveLedgerId();
+        const all = (await db.categories.where('ledger_id').equals(ledgerId).toArray()).filter((c) => !c.is_deleted);
+        const r = await aiParse(text.slice(0, 500), all.map((c) => c.name));
+        setType(r.type === 'income' ? 'income' : 'expense');
+        const hit = r.category ? all.find((c) => c.name === r.category) : undefined;
+        // 命中子分类时选其父级(分类网格只展示一级,子级走 chip 行)
+        const target = hit ? (all.find((c) => c.id === (hit.parent_id ?? hit.id))?.name ?? '') : '';
+        setExpr(String(parseFloat(String(r.amount))));
+        setNote((r.note ?? '').slice(0, 50));
+        if (target) {
+          // 切类型后分类列表异步刷新,等一拍再选中(与 applyVoice 同口径)
+          setTimeout(() => {
+            setSelectedCat(all.find((c) => !c.parent_id && c.name === target && !c.is_hidden)?.id ?? null);
+          }, 120);
+        }
+        setAiTxt('');
+        setToast(`AI 已解析 ${cur()}${formatAmount(String(r.amount))}${r.category ? ` · ${r.category}` : ''},请确认后保存`);
+      } catch (e) {
+        setToast(`AI 解析失败:${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        setAiBusy(false);
+      }
+    })();
   };
 
   const applyVoice = (parsed: VoiceParseResult) => {
@@ -243,6 +277,20 @@ export function QuickAdd({ onNeedAuth }: { onNeedAuth?: () => void }) {
         placeholder="用途(可选,如 砂纸 / 午餐 / 买东西)"
         maxLength={50}
       />
+
+      <div className="ai-row">
+        <input
+          className="ai-input"
+          value={aiTxt}
+          onChange={(e) => setAiTxt(e.target.value)}
+          placeholder="🤖 文字记账:如「昨天打车25块」"
+          maxLength={200}
+          onKeyDown={(e) => { if (e.key === 'Enter') runAiParse(); }}
+        />
+        <button className="ai-btn" disabled={aiBusy || !aiTxt.trim()} onClick={runAiParse}>
+          {aiBusy ? '解析中…' : '解析'}
+        </button>
+      </div>
 
       {type === 'transfer' ? (
         <div className="transfer-accounts">
