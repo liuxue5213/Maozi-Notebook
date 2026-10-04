@@ -5,7 +5,9 @@ import { metaGet, metaSet } from '@ledgerone/sqlite-sync';
 import * as SecureStore from 'expo-secure-store';
 import { db } from './db';
 
-// 默认走公网 frp 隧道:室内外都能用;局域网更快,在「我的」页一键切换
+// 默认走公网 frp 隧道:室内外都能用;局域网更快,在「我的」页一键切换。
+// T-05:HTTPS 证书就绪后,把下面两处 `http://` 改为 `https://<域名>:55505` 即完成加密切换
+// (配套服务端配置见 deploy/nginx-https.conf.example 与 deploy/README-HTTPS.md)。
 export const DEFAULT_SERVER = 'http://43.138.212.106:55505';
 
 /** 后端预设:一键切换(公网 frp / 局域网树莓派) */
@@ -13,6 +15,38 @@ export const SERVER_PRESETS: Array<{ label: string; url: string }> = [
   { label: '公网 (frp)', url: 'http://43.138.212.106:55505' },
   { label: '局域网 (树莓派)', url: 'http://192.168.1.16:60505' },
 ];
+
+/** T-05 协议白名单:服务器地址仅允许 http(s) + 主机名。返回 null = 合法,否则为拒绝原因 */
+export function validateServerUrl(raw: string): string | null {
+  const t = raw.trim();
+  if (!t) return '服务器地址不能为空';
+  let u: URL;
+  try {
+    u = new URL(t);
+  } catch {
+    return '不是合法的 URL(需含协议,如 http:// 或 https://)';
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return '仅支持 http/https 协议';
+  if (!u.hostname) return '缺少主机名';
+  return null;
+}
+
+/** T-05 明文传输告警:公网地址走 http 时返回提示文案;局域网/回环/本机名豁免 */
+export function insecureTransportReason(raw: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(raw.trim());
+  } catch {
+    return null;
+  }
+  if (u.protocol !== 'http:') return null;
+  const h = u.hostname.toLowerCase();
+  // 私网段:localhost/127/10/172.16-31/192.168 + mDNS;IPv6 私网 fc00::/7 前缀 f[cd]
+  const isPrivate = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|f[cd])/.test(h) || h.endsWith('.local');
+  return isPrivate
+    ? null
+    : '⚠️ 该地址为公网明文 HTTP,登录令牌与账目数据可被窃听;请尽快配置 HTTPS(见 deploy/README-HTTPS.md)';
+}
 
 /** 健康探测:2.5s 超时,只看 /healthz 是否 200 */
 async function probeServer(url: string, ms = 2500): Promise<boolean> {

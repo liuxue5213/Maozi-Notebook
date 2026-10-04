@@ -14,7 +14,7 @@ import { initDb, resetInitCache, createLedgerWithSeed, listRecent, saveTx, topCa
 import { clearSession as clearSessionLocal } from './src/lib/api';
 import { resetLocalDatabase } from './src/lib/db';
 import { prepareAfterLogin, saveLocal } from '@ledgerone/sqlite-sync';
-import { authApi, aiInsights, aiParse, clearSession, getServerUrl, isLoggedIn, logout as logoutAll, saveSession, setServerUrl, SERVER_PRESETS, resolveServerUrl } from './src/lib/api';
+import { authApi, aiInsights, aiParse, clearSession, getServerUrl, insecureTransportReason, isLoggedIn, logout as logoutAll, saveSession, setServerUrl, SERVER_PRESETS, resolveServerUrl, validateServerUrl } from './src/lib/api';
 
 type Tab = 'record' | 'list' | 'report' | 'me';
 
@@ -333,8 +333,9 @@ function ImportScreen({ onBack }: { onBack: () => void }) {
     const firstAcc = (await db.getAllAsync<{ id: string }>('SELECT id FROM accounts WHERE is_deleted = 0 AND ledger_id = ? ORDER BY sort LIMIT 1', [ledgerId]))[0]?.id ?? '';
     const cats = await db.getAllAsync<{ id: string; name: string }>('SELECT id, name FROM categories WHERE is_deleted = 0 AND ledger_id = ?', [ledgerId]);
     const now = Date.now();
+    const baseCurrency = ((await metaGet(db, 'base_currency')) as string) ?? 'CNY'; // T-02:跟随账本主币种
     await saveLocal(db, 'transaction', { id: newId(), ledger_id: ledgerId, user_id: 'local', member_id: null, type: 'expense',
-      amount: p.amount, currency: 'CNY', amount_base: p.amount, exchange_rate: null,
+      amount: p.amount, currency: baseCurrency, amount_base: p.amount, exchange_rate: null,
       category_id: cats.find((c) => c.name === p.name)?.id ?? null, account_id: firstAcc, to_account_id: null,
       happened_at: Number(p.happened_at), note: p.name, is_refunded: 0, refund_of_id: null, reimburse_status: null,
       exclude_from_budget: 0, attachment_count: 0, source: 'import',
@@ -547,6 +548,13 @@ function LockGate({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     void (async () => {
       const on = await isLockEnabled();
+      // 审查修复(P1):「已启用但既无生物识别注册、也无 PIN 哈希」的残留态(如 PIN 设置中途杀 App)
+      // 会让 verifyPin 对任意输入放行 → 直接自愈为未上锁,杜绝失效开门
+      if (on && !(await biometricAvailable()) && !(await hasPin())) {
+        await disableLock();
+        setEnabled(false);
+        return;
+      }
       setEnabled(on);
       if (on) {
         const bio = await biometricAvailable();
@@ -557,7 +565,13 @@ function LockGate({ children }: { children: React.ReactNode }) {
       }
     })();
     const sub = AppState.addEventListener('change', (st) => {
-      if (st === 'background') void isLockEnabled().then((on) => { if (on) setLocked(true); });
+      if (st === 'background') {
+        // 审查修复(P3):与挂载自愈同口径——「已启用但无 PIN/无生物识别」的设置中途态不上锁,
+        // 否则切回前台会进入任意 PIN 可解的锁屏
+        void isLockEnabled().then(async (on) => {
+          if (on && ((await hasPin()) || (await biometricAvailable()))) setLocked(true);
+        });
+      }
     });
     return () => sub.remove();
   }, []);
@@ -798,9 +812,10 @@ function BudgetCard() {
     const now = Date.now();
     const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
     const b = model?.budget;
+    const baseCurrency = ((await metaGet(db, 'base_currency')) as string) ?? 'CNY'; // T-02:跟随账本主币种
     const row = b
       ? { ...b, total_amount: amount, rollover, client_version: Number((b as unknown as Record<string, unknown>).client_version ?? 0) + 1, updated_at: now }
-      : { id: newId(), ledger_id: ledgerId, period_type: 'monthly', period_start: monthStart, total_amount: amount, currency: 'CNY', rollover, client_version: 1, server_version: null, is_deleted: false, deleted_at: null, created_at: now, updated_at: now };
+      : { id: newId(), ledger_id: ledgerId, period_type: 'monthly', period_start: monthStart, total_amount: amount, currency: baseCurrency, rollover, client_version: 1, server_version: null, is_deleted: false, deleted_at: null, created_at: now, updated_at: now };
     await saveLocal(db, 'budget', row as never);
     for (const item of model?.items ?? []) {
       const rec = item as unknown as Record<string, unknown>;
@@ -1771,8 +1786,9 @@ function AccountsScreen({ onBack }: { onBack: () => void }) {
     const now = Date.now();
     const from = rows.find((r) => !isLiability(String(r.type) as never));
     if (!from) return;
+    const baseCurrency = ((await metaGet(db, 'base_currency')) as string) ?? 'CNY'; // T-02:跟随账本主币种
     await saveLocal(db, 'transaction', { id: newId(), ledger_id: ledgerId, user_id: 'local', member_id: null,
-      type: 'transfer', amount: Number(repayAmt).toFixed(2), currency: 'CNY', amount_base: Number(repayAmt).toFixed(2),
+      type: 'transfer', amount: Number(repayAmt).toFixed(2), currency: baseCurrency, amount_base: Number(repayAmt).toFixed(2),
       exchange_rate: null, category_id: null, account_id: from.id, to_account_id: repayFor.id,
       happened_at: now, note: `还款 · ${String(repayFor.name)}`, is_refunded: 0, refund_of_id: null,
       reimburse_status: null, exclude_from_budget: 0, attachment_count: 0, source: 'manual',
@@ -2009,6 +2025,10 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
   const [busy, setBusy] = useState(false);
 
   const [me, setMe] = useState<{ email?: string | null; nickname?: string | null } | null>(null);
+  // N-1:生物识别不可用时必须由用户自设 PIN,禁止写入默认口令
+  const [pinSetup, setPinSetup] = useState(false);
+  const [pinNew, setPinNew] = useState('');
+  const [pinConfirm, setPinConfirm] = useState('');
 
   useEffect(() => {
     void initDb().then(async () => {
@@ -2027,6 +2047,9 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
 
   const submit = async () => {
     if (!email || !password) return;
+    // T-05:协议白名单,非法地址直接拒绝,不再进故障转移链
+    const invalid = validateServerUrl(server);
+    if (invalid) { setMsg(invalid); return; }
     setBusy(true);
     setMsg(null);
     try {
@@ -2132,11 +2155,11 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
       <Pressable style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12 }}
         onPress={() => {
           void (async () => {
-            if (await isLockEnabled()) { await disableLock(); setMsg('应用锁已关闭'); }
+            if (await isLockEnabled()) { await disableLock(); setPinSetup(false); setMsg('应用锁已关闭'); }
             else {
               const kind = await enableLock();
               if (kind === 'biometric') setMsg('应用锁已开启(面容/指纹)');
-              else { await setPin('1234'); setMsg('应用锁已开启,初始 PIN 1234——请在安全设置中修改'); }
+              else { setPinSetup(true); return; } // 无生物识别 → 进入自设 PIN 流程,不再写默认 PIN
             }
             setTimeout(() => setMsg(null), 2500);
           })();
@@ -2144,6 +2167,38 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
         <Text style={{ fontSize: 13, color: '#1a1c23' }}>🔒 应用锁(生物识别 / PIN)</Text>
         <Text style={{ fontSize: 12, color: '#8a93a5' }}>点按开启/关闭</Text>
       </Pressable>
+      {pinSetup && (
+        <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 14, gap: 8 }}>
+          <Text style={{ fontSize: 13, fontWeight: '700', color: '#1a1c23' }}>设置应用锁 PIN(4–8 位数字)</Text>
+          <TextInput style={styles.input} value={pinNew} onChangeText={(t) => setPinNew(t.replace(/[^\d]/g, '').slice(0, 8))} keyboardType="number-pad" secureTextEntry placeholder="输入新 PIN" placeholderTextColor="#b4bac6" />
+          <TextInput style={styles.input} value={pinConfirm} onChangeText={(t) => setPinConfirm(t.replace(/[^\d]/g, '').slice(0, 8))} keyboardType="number-pad" secureTextEntry placeholder="再次输入确认" placeholderTextColor="#b4bac6" />
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <Pressable
+              style={{ flex: 1, backgroundColor: pinNew.length >= 4 && pinNew === pinConfirm ? '#4361ee' : '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center', opacity: pinNew.length >= 4 && pinNew === pinConfirm ? 1 : 0.5 }}
+              disabled={pinNew.length < 4 || pinNew !== pinConfirm}
+              onPress={() => {
+                void (async () => {
+                  await setPin(pinNew);
+                  setPinSetup(false); setPinNew(''); setPinConfirm('');
+                  setMsg('应用锁已开启(PIN)');
+                  setTimeout(() => setMsg(null), 2500);
+                })();
+              }}>
+              <Text style={{ fontSize: 13, color: pinNew.length >= 4 && pinNew === pinConfirm ? '#fff' : '#8a93a5' }}>确认开启</Text>
+            </Pressable>
+            <Pressable
+              style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }}
+              onPress={() => {
+                void (async () => {
+                  await disableLock(); // 未设完即取消:回滚开启状态,避免留下无口令的锁
+                  setPinSetup(false); setPinNew(''); setPinConfirm('');
+                })();
+              }}>
+              <Text style={{ fontSize: 13, color: '#4a5160' }}>取消</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
       {!logged && (
         <>
           <Text style={styles.label}>服务器</Text>
@@ -2162,6 +2217,9 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
             ))}
           </View>
           <TextInput style={styles.input} value={server} onChangeText={setServer} autoCapitalize="none" placeholder="http://192.168.x.x:60505" placeholderTextColor="#b4bac6" />
+          {insecureTransportReason(server) && (
+            <Text style={{ fontSize: 11, color: '#e67e22', marginBottom: 6 }}>{insecureTransportReason(server)}</Text>
+          )}
           <Text style={styles.label}>邮箱</Text>
           <TextInput style={styles.input} value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" placeholder="you@example.com" placeholderTextColor="#b4bac6" />
           <Text style={styles.label}>密码</Text>
