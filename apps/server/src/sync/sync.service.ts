@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { and, eq, gt, inArray, sql, type SQL } from 'drizzle-orm';
-import { hasEffectiveChanges, mergeServerRow, mergeThreeWay } from '@ledgerone/sync';
+import { hasEffectiveChanges, isStaleLwwPush, mergeServerRow, mergeThreeWay } from '@ledgerone/sync';
 import {
   newId, sanitizeEntityPayload,
   type ChangeOp, type EntityKind, type PullResponse, type PullRow, type PushChangeResult,
@@ -196,7 +196,11 @@ export class SyncService {
       return { entityId: op.entityId, status: 'noop' };
     }
     // 三方合并(第 13 轮):op.base 为编辑基线快照时逐字段三方对比,修复「陈旧非关键字段
-    // 静默覆盖较新修改」;旧客户端不带 base → 退化整载荷 LWW(mergeServerRow,向后兼容)。
+    // 静默覆盖较新修改」;旧客户端不带 base → 先做迟到拒收(预算恢复 bug ②:升级前积压的
+    // 无 base 旧载荷走 LWW 会把别端较新修改盖回),再退化整载荷 LWW(向后兼容)。
+    if (!op.base && isStaleLwwPush(existing, payload)) {
+      return { entityId: op.entityId, status: 'noop' };
+    }
     const { merged, conflicts } = op.base
       ? mergeThreeWay(existing, payload, op.base)
       : mergeServerRow(existing, payload);

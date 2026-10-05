@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeServerRow, mergeThreeWay } from '../src/merge';
+import { isStaleLwwPush, mergeServerRow, mergeThreeWay } from '../src/merge';
 
 describe('字段级合并(PRD 5.5)', () => {
   const server = {
@@ -141,5 +141,34 @@ describe('三方字段级合并(第 13 轮,mergeThreeWay)', () => {
     const incoming = { ...serverNow, note: null };
     const { merged } = mergeThreeWay(serverNow, incoming, base);
     expect(merged.note).toBeNull();
+  });
+});
+
+describe('isStaleLwwPush(无 base 迟到载荷拒收,预算恢复 bug ②)', () => {
+  const T0 = 1_800_000_000_000;
+  const server = { total_amount: '5000', updated_at: T0, client_version: 3 };
+
+  it('载荷明显更旧且版本不高于现存 → 判为迟到', () => {
+    const stale = { total_amount: '3000', updated_at: T0 - 600_000, client_version: 2 };
+    expect(isStaleLwwPush(server, stale)).toBe(true);
+  });
+
+  it('载荷略旧但在 60s 容差内 → 不拒(容忍时钟偏差)', () => {
+    const near = { total_amount: '4000', updated_at: T0 - 30_000, client_version: 3 };
+    expect(isStaleLwwPush(server, near)).toBe(false);
+  });
+
+  it('载荷更旧但 client_version 更高 → 不拒(可能是坏时钟下的新编辑)', () => {
+    const newerVer = { total_amount: '4000', updated_at: T0 - 600_000, client_version: 4 };
+    expect(isStaleLwwPush(server, newerVer)).toBe(false);
+  });
+
+  it('载荷比现存新 → 不拒', () => {
+    const fresh = { total_amount: '4000', updated_at: T0 + 60_000, client_version: 4 };
+    expect(isStaleLwwPush(server, fresh)).toBe(false);
+  });
+
+  it('缺失 updated_at 时保守不拒', () => {
+    expect(isStaleLwwPush(server, { total_amount: '1' })).toBe(false);
   });
 });

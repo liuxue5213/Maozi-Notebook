@@ -69,6 +69,24 @@ export function hasEffectiveChanges(server: Record<string, unknown>, incoming: R
   return false;
 }
 
+/** LWW 迟到载荷拒收阈值:容忍 60s 设备时钟偏差 */
+const STALE_LWW_TOLERANCE_MS = 60_000;
+
+/**
+ * 无 base 旧载荷的迟到拒收(预算恢复 bug ②):
+ * 升级前积压的 outbox 不带 base 快照 → 服务端退化整载荷 LWW「后推者赢」,
+ * 离线积压的旧载荷会把别端较新的修改静默盖回(「预算改了又被恢复」根因之一)。
+ * 判定:载荷明显更旧(updated_at 早于现存行超过阈值)且未带来更高 client_version → 判为迟到。
+ * 代价:极端坏时钟下的新编辑可能被拒——本地仍保留,下次编辑带 base 后自然收敛,可接受。
+ */
+export function isStaleLwwPush(server: Record<string, unknown>, incoming: Record<string, unknown>): boolean {
+  const serverAt = Number(server.updated_at ?? 0);
+  const payloadAt = Number(incoming.updated_at ?? 0);
+  if (!serverAt || !payloadAt) return false;
+  if (payloadAt >= serverAt - STALE_LWW_TOLERANCE_MS) return false;
+  return Number(incoming.client_version ?? 0) <= Number(server.client_version ?? 0);
+}
+
 /**
  * 三方字段级合并(第 13 轮,修复「非关键字段整载荷 LWW 静默覆盖」):
  * 以客户端编辑基线快照(base)为公共祖先逐字段对比 ——

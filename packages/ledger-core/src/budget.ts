@@ -47,9 +47,15 @@ export interface BudgetModel {
 export function buildBudgetModel(input: BudgetModelInput): BudgetModel {
   const { budgets, budgetItems, transactions, categories, ledgerId, periodStart, periodEnd, prevPeriodStart } = input;
 
+  // 同月双行 tie-break(预算恢复 bug ③):双端离线各自建账本月预算会产生两条同月记录,
+  // 仅按 period_start 排序时并列顺序取决于输入数组序(两端不同 → 各选各的,表现为「改了又被恢复」)。
+  // 规则:period_start 降序 → created_at 降序 → id 降序,两端确定性选中同一条。
   const all = budgets
     .filter((b) => !b.is_deleted && b.ledger_id === ledgerId && b.period_type === 'monthly')
-    .sort((a, b) => b.period_start - a.period_start);
+    .sort((a, b) =>
+      (b.period_start - a.period_start)
+      || ((b.created_at ?? 0) - (a.created_at ?? 0))
+      || (String(b.id).localeCompare(String(a.id))));
   const budget = all[0];
 
   const catMap = new Map<string, CategoryRow>(categories.map((c) => [c.id, c]));

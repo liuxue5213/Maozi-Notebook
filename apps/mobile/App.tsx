@@ -816,15 +816,15 @@ function BudgetCard() {
     const row = b
       ? { ...b, total_amount: amount, rollover, client_version: Number((b as unknown as Record<string, unknown>).client_version ?? 0) + 1, updated_at: now }
       : { id: newId(), ledger_id: ledgerId, period_type: 'monthly', period_start: monthStart, total_amount: amount, currency: baseCurrency, rollover, client_version: 1, server_version: null, is_deleted: false, deleted_at: null, created_at: now, updated_at: now };
-    await saveLocal(db, 'budget', row as never);
+    await saveLocal(db, 'budget', row as never, { base: (b as unknown as Record<string, unknown>) ?? undefined }); // base=编辑前快照:三方合并防「后推者赢」恢复旧值
     for (const item of model?.items ?? []) {
       const rec = item as unknown as Record<string, unknown>;
       const cid = String(rec.category_id);
       const draft = (catDrafts[cid] ?? '').trim();
       if (draft === '') {
-        await saveLocal(db, 'budget_item', { ...rec, is_deleted: true, deleted_at: now, client_version: Number(rec.client_version ?? 0) + 1, updated_at: now } as never, { op: 'delete' });
+        await saveLocal(db, 'budget_item', { ...rec, is_deleted: true, deleted_at: now, client_version: Number(rec.client_version ?? 0) + 1, updated_at: now } as never, { op: 'delete', base: rec });
       } else if (isValidAmount(draft) && Number(draft) > 0 && rec.amount !== draft) {
-        await saveLocal(db, 'budget_item', { ...rec, amount: draft, client_version: Number(rec.client_version ?? 0) + 1, updated_at: now } as never);
+        await saveLocal(db, 'budget_item', { ...rec, amount: draft, client_version: Number(rec.client_version ?? 0) + 1, updated_at: now } as never, { base: rec });
       }
     }
     setEditing(false);

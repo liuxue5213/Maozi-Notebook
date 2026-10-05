@@ -162,7 +162,7 @@ function BudgetModal({
         updated_at: now,
       };
     }
-    await saveLocal('budget', row as unknown as Record<string, unknown>);
+    await saveLocal('budget', row as unknown as Record<string, unknown>, 'upsert', (original ?? undefined) as unknown as Record<string, unknown> | undefined); // base=编辑前快照:三方合并防「后推者赢」恢复旧值
 
     // 改总预算(用户手动改动)时,未单独改动的分类额度按比例缩放,合计精确等于新总额
     // (取整余数补给最大项);用户本轮手动改过/清空的条目保持其意图不动
@@ -194,7 +194,7 @@ function BudgetModal({
       if (draft === '') {
         if (existing) {
           const del: BudgetItemRow = { ...existing, is_deleted: true, deleted_at: now, client_version: existing.client_version + 1, updated_at: now };
-          await saveLocal('budget_item', del as unknown as Record<string, unknown>, 'delete');
+          await saveLocal('budget_item', del as unknown as Record<string, unknown>, 'delete', existing as unknown as Record<string, unknown>);
         }
         continue;
       }
@@ -202,7 +202,7 @@ function BudgetModal({
       if (existing) {
         if (existing.amount === draft) continue;
         const upd: BudgetItemRow = { ...existing, amount: draft, client_version: existing.client_version + 1, updated_at: now };
-        await saveLocal('budget_item', upd as unknown as Record<string, unknown>);
+        await saveLocal('budget_item', upd as unknown as Record<string, unknown>, 'upsert', existing as unknown as Record<string, unknown>);
       } else {
         const item: BudgetItemRow = {
           id: newId(),
@@ -228,7 +228,7 @@ function BudgetModal({
     if (!window.confirm('删除本月预算(含分类额度)?')) return;
     const now = Date.now();
     const row: BudgetRow = { ...original, is_deleted: true, deleted_at: now, client_version: original.client_version + 1, updated_at: now };
-    await saveLocal('budget', row as unknown as Record<string, unknown>, 'delete');
+    await saveLocal('budget', row as unknown as Record<string, unknown>, 'delete', (original ?? undefined) as unknown as Record<string, unknown> | undefined);
     for (const it of originalItems) {
       const del: BudgetItemRow = { ...it, is_deleted: true, deleted_at: now, client_version: it.client_version + 1, updated_at: now };
       await saveLocal('budget_item', del as unknown as Record<string, unknown>, 'delete');

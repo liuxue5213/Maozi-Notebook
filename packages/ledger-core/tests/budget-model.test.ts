@@ -219,4 +219,22 @@ describe('buildBudgetModel(端无关预算编排)', () => {
     expect(m.budget?.id).toBe('b-new');
     expect(m.progress?.total).toBe('3000');
   });
+
+  it('同月双行并列时 tie-break 确定性选择(created_at 新者胜,与输入数组顺序无关)', () => {
+    const input = (order: BudgetRow[]) => buildBudgetModel({
+      ...baseInput,
+      budgets: order,
+      transactions: [],
+    });
+    const older = budget({ id: 'b-a', period_start: START, total_amount: '2000', created_at: now });
+    const newer = budget({ id: 'b-b', period_start: START, total_amount: '5000', created_at: now + 5_000 });
+    // 两种输入顺序都必须选中同一条(created_at 较新的 b-b)
+    expect(input([older, newer]).budget?.id).toBe('b-b');
+    expect(input([newer, older]).budget?.id).toBe('b-b');
+    // created_at 也并列时按 id 降序稳定裁决
+    const twinA = budget({ id: 'a-twin', period_start: START, total_amount: '1', created_at: now });
+    const twinB = budget({ id: 'b-twin', period_start: START, total_amount: '2', created_at: now });
+    expect(input([twinA, twinB]).budget?.id).toBe('b-twin');
+    expect(input([twinB, twinA]).budget?.id).toBe('b-twin');
+  });
 });
