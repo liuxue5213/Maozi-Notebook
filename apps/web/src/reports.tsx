@@ -21,6 +21,9 @@ export function Reports() {
   const [drillId, setDrillId] = useState<string | null>(null);
   const [aiText, setAiText] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
+  const [askText, setAskText] = useState('');
+  const [askAnswer, setAskAnswer] = useState('');
+  const [askBusy, setAskBusy] = useState(false);
 
   const model = useLiveQuery(() => loadReportModel(period, kind), [period, kind]);
 
@@ -36,6 +39,22 @@ export function Reports() {
     } catch (e) {
       setAiText(`分析失败:${e instanceof Error ? e.message : String(e)}`);
     } finally { setAiBusy(false); }
+  };
+  // N5 对话式查询:拼本期聚合上下文提问,走 /v1/ai/chat(用户级配额/审计复用,零后端新增)
+  const askAi = async () => {
+    const q = askText.trim();
+    if (!q || askBusy) return;
+    setAskBusy(true); setAskAnswer('');
+    try {
+      const { aiChat } = await import('./sync/api');
+      const top = [...model.byTop.entries()].slice(0, 10)
+        .map(([id, v]) => `${model.catMap.get(id)?.name ?? id} ${v.amount}元`).join('、');
+      const ctx = `记账数据(${periodLabel},${period}):收入 ${model.income} 元,支出 ${model.expense} 元,结余 ${balance} 元。分类排行: ${top || '无'}。`;
+      const r = await aiChat(`${ctx}\n用户问题: ${q}`);
+      setAskAnswer(r.text);
+    } catch (e) {
+      setAskAnswer(`问答失败:${e instanceof Error ? e.message : String(e)}`);
+    } finally { setAskBusy(false); }
   };
   const periodLabel = PERIODS.find((p) => p.key === period)?.label ?? '';
   const balance = subAmount(model.income, model.expense);
@@ -78,6 +97,20 @@ export function Reports() {
           {aiBusy ? '🤖 分析中…' : '🤖 AI 分析本期数据'}
         </button>
         {aiText && <div className="me-section" style={{ whiteSpace: 'pre-wrap', fontSize: 13 }}>{aiText}</div>}
+        <div className="ai-row" style={{ marginTop: 8 }}>
+          <input
+            className="ai-input"
+            value={askText}
+            onChange={(e) => setAskText(e.target.value)}
+            placeholder="🤖 问一问:如「这个月吃饭花多少」"
+            maxLength={200}
+            onKeyDown={(e) => { if (e.key === 'Enter') void askAi(); }}
+          />
+          <button className="ai-btn" disabled={askBusy || !askText.trim()} onClick={() => void askAi()}>
+            {askBusy ? '思考中…' : '提问'}
+          </button>
+        </div>
+        {askAnswer && <div className="me-section" style={{ whiteSpace: 'pre-wrap', fontSize: 13 }}>{askAnswer}</div>}
       </div>
 
       {model.forecast && (model.forecast.predicted > 0 || model.forecast.sampleMonths > 0) && (

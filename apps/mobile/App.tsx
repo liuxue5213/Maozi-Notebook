@@ -14,7 +14,7 @@ import { initDb, resetInitCache, createLedgerWithSeed, listRecent, saveTx, topCa
 import { clearSession as clearSessionLocal } from './src/lib/api';
 import { resetLocalDatabase } from './src/lib/db';
 import { prepareAfterLogin, saveLocal } from '@ledgerone/sqlite-sync';
-import { authApi, aiInsights, aiParse, clearSession, getServerUrl, insecureTransportReason, isLoggedIn, logout as logoutAll, saveSession, setServerUrl, SERVER_PRESETS, resolveServerUrl, validateServerUrl } from './src/lib/api';
+import { authApi, aiChat, aiInsights, aiParse, clearSession, getServerUrl, insecureTransportReason, isLoggedIn, logout as logoutAll, saveSession, setServerUrl, SERVER_PRESETS, resolveServerUrl, validateServerUrl } from './src/lib/api';
 
 type Tab = 'record' | 'list' | 'report' | 'me';
 
@@ -1425,6 +1425,10 @@ function ListScreen({ drillCat, onClearDrill }: { drillCat: string | null; onCle
 function ReportScreen({ onDrill }: { onDrill: (catId: string) => void }) {
   const [aiText, setAiText] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
+  // N5 对话式查询「问一问」
+  const [askText, setAskText] = useState('');
+  const [askAnswer, setAskAnswer] = useState('');
+  const [askBusy, setAskBusy] = useState(false);
   const [monthOffset, setMonthOffset] = useState(0);
   const [sum, setSum] = useState({ income: 0, expense: 0 });
   const [byCat, setByCat] = useState<Array<{ name: string; icon: string; total: number; pct: number; catId: string | null }>>([]);
@@ -1509,6 +1513,48 @@ function ReportScreen({ onDrill }: { onDrill: (catId: string) => void }) {
             </Pressable>
           </View>
           {aiText && <Text style={{ fontSize: 12, color: '#1a1c23', lineHeight: 18, marginBottom: 10, backgroundColor: '#f6f7ff', borderRadius: 8, padding: 8 }}>{aiText}</Text>}
+          <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
+            <TextInput
+              style={{ ...styles.input, flex: 1, minHeight: 36 }}
+              value={askText}
+              onChangeText={(t) => setAskText(t.slice(0, 200))}
+              placeholder="🤖 问一问:如「这个月吃饭花多少」"
+              placeholderTextColor="#b4bac6"
+              onSubmitEditing={() => {
+                void (async () => {
+                  const q = askText.trim();
+                  if (!q || askBusy) return;
+                  setAskBusy(true); setAskAnswer('');
+                  try {
+                    const top = byCat.slice(0, 10).map((c) => `${c.name} ${c.total}元`).join('、');
+                    const ctx = `记账数据(${monthOffset === 0 ? '本月' : mr.label}):收入 ${sum.income} 元,支出 ${sum.expense} 元。支出分类排行: ${top || '无'}。`;
+                    const r = await aiChat(`${ctx}\n用户问题: ${q}`);
+                    setAskAnswer(r.text);
+                  } catch (e) { setAskAnswer(`问答失败:${e instanceof Error ? e.message : String(e)}`); }
+                  finally { setAskBusy(false); }
+                })();
+              }}
+            />
+            <Pressable style={{ backgroundColor: askBusy || !askText.trim() ? '#b4bac6' : '#4361ee', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, justifyContent: 'center' }}
+              disabled={askBusy || !askText.trim()}
+              onPress={() => {
+                void (async () => {
+                  const q = askText.trim();
+                  if (!q || askBusy) return;
+                  setAskBusy(true); setAskAnswer('');
+                  try {
+                    const top = byCat.slice(0, 10).map((c) => `${c.name} ${c.total}元`).join('、');
+                    const ctx = `记账数据(${monthOffset === 0 ? '本月' : mr.label}):收入 ${sum.income} 元,支出 ${sum.expense} 元。支出分类排行: ${top || '无'}。`;
+                    const r = await aiChat(`${ctx}\n用户问题: ${q}`);
+                    setAskAnswer(r.text);
+                  } catch (e) { setAskAnswer(`问答失败:${e instanceof Error ? e.message : String(e)}`); }
+                  finally { setAskBusy(false); }
+                })();
+              }}>
+              <Text style={{ color: '#fff', fontSize: 12 }}>{askBusy ? '思考中…' : '提问'}</Text>
+            </Pressable>
+          </View>
+          {askAnswer && <Text style={{ fontSize: 12, color: '#1a1c23', lineHeight: 18, marginBottom: 10, backgroundColor: '#f6f7ff', borderRadius: 8, padding: 8 }}>{askAnswer}</Text>}
           {byCat.length === 0 && <Text style={{ color: '#8a93a5', fontSize: 12 }}>本月暂无支出</Text>}
           {byCat.map((c, i) => (
             <Pressable key={c.name + i} style={{ marginBottom: 10 }} onPress={() => onDrill(String(c.catId ?? ''))}>

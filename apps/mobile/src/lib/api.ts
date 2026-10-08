@@ -156,6 +156,10 @@ export const aiParse = (text: string, categories: string[]) =>
 export const aiInsights = (body: Record<string, unknown>) =>
   apiFetch('/v1/ai/insights', { method: 'POST', body: JSON.stringify(body) }) as unknown as Promise<{ text: string }>;
 
+/** AI 对话式查询(N5「问一问」):端上拼好本期数据上下文+用户问题 */
+export const aiChat = (content: string) =>
+  apiFetch('/v1/ai/chat', { method: 'POST', body: JSON.stringify({ content: content.slice(0, 2000) }) }) as unknown as Promise<{ text: string }>;
+
 export const authApi = {
   login: (email: string, password: string) => auth.login(email, password),
   register: (email: string, password: string) => auth.register(email, password),

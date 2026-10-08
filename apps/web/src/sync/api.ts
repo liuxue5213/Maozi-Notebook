@@ -164,3 +164,12 @@ export async function aiParse(text: string, categories: string[]): Promise<{
     throw aiErrorMessage(e, '文字记账');
   }
 }
+
+/** AI 对话式查询(N5「问一问」):端上拼好本期数据上下文+用户问题,走 /v1/ai/chat(用户级配额/审计复用) */
+export async function aiChat(content: string): Promise<{ text: string }> {
+  try {
+    return await apiFetch('/v1/ai/chat', { method: 'POST', body: JSON.stringify({ content: content.slice(0, 2000) }) }) as unknown as { text: string };
+  } catch (e) {
+    throw aiErrorMessage(e, 'AI 问答');
+  }
+}
