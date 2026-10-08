@@ -93,11 +93,14 @@ export function Reports() {
           <div className="label">结余</div>
           <div className={`num ${Number(balance) >= 0 ? 'income' : 'expense'}`}>{cur()}{formatAmount(balance)}</div>
         </div>
-        <button className="primary slim-btn" style={{ marginTop: 8 }} disabled={aiBusy} onClick={() => void runAi()}>
+      </div>
+
+      <div className="report-card">
+        <button className="primary slim-btn" disabled={aiBusy} onClick={() => void runAi()}>
           {aiBusy ? '🤖 分析中…' : '🤖 AI 分析本期数据'}
         </button>
         {aiText && <div className="me-section" style={{ whiteSpace: 'pre-wrap', fontSize: 13 }}>{aiText}</div>}
-        <div className="ai-row" style={{ marginTop: 8 }}>
+        <div className="ai-row">
           <input
             className="ai-input"
             value={askText}
