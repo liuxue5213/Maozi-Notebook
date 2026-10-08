@@ -24,7 +24,11 @@ export function TxEditor({ tx, onClose }: { tx: TransactionRow; onClose: () => v
 
   // 分类按当前账本作用域(M02 多账本)
   const cats = useLiveQuery(async () => (await db.categories.where('ledger_id').equals(await getActiveLedgerId()).toArray()), []);
-  const accounts = useLiveQuery(async () => (await db.accounts.toArray()).filter((a) => !a.is_archived), []);
+  const accounts = useLiveQuery(async () => {
+      const ledgerId = await getActiveLedgerId();
+      // 按当前账本过滤(且排除已删/已归档):防止其他账本(含已删幽灵账本)的账户混入下拉
+      return (await db.accounts.toArray()).filter((a) => !a.is_archived && !a.is_deleted && a.ledger_id === ledgerId);
+    }, []);
 
   const selectedCat = cats?.find((c) => c.id === categoryId) ?? null;
   const selectedTopId = selectedCat ? (selectedCat.parent_id ?? selectedCat.id) : '';

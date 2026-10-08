@@ -72,7 +72,11 @@ export function QuickAdd({ onNeedAuth }: { onNeedAuth?: () => void }) {
     if (!cat) return [];
     return (await db.categories.where('ledger_id').equals(cat.ledger_id).toArray()).filter((c) => c.parent_id === cat.id && !c.is_hidden);
   }, [selectedCat]);
-  const accounts = useLiveQuery(async () => (await db.accounts.toArray()).filter((a) => !a.is_archived), []);
+  const accounts = useLiveQuery(async () => {
+      const ledgerId = await getActiveLedgerId();
+      // 按当前账本过滤(且排除已删/已归档):防止其他账本(含已删幽灵账本)的账户混入下拉
+      return (await db.accounts.toArray()).filter((a) => !a.is_archived && !a.is_deleted && a.ledger_id === ledgerId);
+    }, []);
 
   useEffect(() => {
     setExpr('');
