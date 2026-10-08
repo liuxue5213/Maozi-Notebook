@@ -86,6 +86,16 @@ export const transactionSchema = z.object({
   exclude_from_budget: z.boolean().default(false),
   attachment_count: z.number().int().nonnegative().default(0),
   source: z.enum(TRANSACTION_SOURCES).default('manual'),
+  // 同步元字段透传(协议缺口修复 2026-10-09):此前 zod 默认剥离未声明字段,
+  // 「恢复(软删→未删)」这类只改删除状态的上行会被剥成空变更而判 noop,
+  // 导致回收站恢复/误删撤销无法跨端同步
+  user_id: z.string().optional(),
+  client_version: z.number().int().optional(),
+  server_version: z.number().int().nullable().optional(),
+  is_deleted: z.boolean().optional(),
+  deleted_at: tsNum.nullable().optional(),
+  created_at: tsNum.optional(),
+  updated_at: tsNum.optional(),
 });
 
 export const budgetSchema = z.object({
