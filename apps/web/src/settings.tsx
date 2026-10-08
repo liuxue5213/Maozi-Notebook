@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { SUPPORTED_CURRENCIES, currencySymbol } from '@ledgerone/domain';
-import { authApi, getBaseCurrency } from './sync/api';
+import { authApi, clearTokens, getBaseCurrency } from './sync/api';
 import { db } from './db/db';
 
 /** 账号设置(M16/第 16 轮):昵称 + 主币种 + 注销账号(P0-6)。主币种应用于新建交易的记账币种;存量数据不回算。 */
@@ -85,7 +85,11 @@ export function SettingsPage({ onBack, onDeleted }: { onBack: () => void; onDele
               setError(null);
               authApi.deleteMe(delPassword)
                 .then(async () => {
-                  localStorage.clear(); // 注销后本机全部数据(含加密库)由用户手动清空或重新进入时播种
+                  // O6 有序停机:先吊销本地会话与字段加密密钥(阻断新的同步调度与可解密状态),
+                  // 再由 Dexie 关闭连接并删除整库;只清会话/密钥类键——
+                  // 服务器地址(lo_server)/主题/应用锁/模板等设备级偏好保留(替代原 localStorage.clear() 全清,RK-08)
+                  clearTokens();
+                  localStorage.removeItem('lo_fenc');
                   await db.delete();
                   onDeleted();
                 })

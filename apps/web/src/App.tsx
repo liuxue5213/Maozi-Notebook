@@ -10,6 +10,7 @@ import { TodayCard, TransactionList } from './lists';
 import { Reports } from './reports';
 import { BudgetCard } from './budget';
 import { AuthModal, MeTab } from './auth';
+import { WriteErrorToast } from './WriteErrorToast';
 
 type Tab = 'record' | 'list' | 'report' | 'me';
 
@@ -139,6 +140,7 @@ export function App() {
           }}
         />
       )}
+      <WriteErrorToast />
     </div>
   );
 }

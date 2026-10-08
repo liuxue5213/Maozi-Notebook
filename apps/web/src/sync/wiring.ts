@@ -39,7 +39,30 @@ export async function enqueue(
   scheduleSync();
 }
 
-/** 单条业务写入与 outbox 原子提交。 */
+/** O4 写入失败可见化:全局订阅(WriteErrorToast 消费)。3s 窗口同签名去重,防批量写入刷屏 */
+export interface WriteError { entity: string; message: string; at: number; }
+const writeErrListeners = new Set<(e: WriteError) => void>();
+let lastErrSig = '';
+let lastErrAt = 0;
+
+export function subscribeWriteErrors(fn: (e: WriteError) => void): () => void {
+  writeErrListeners.add(fn);
+  return () => { writeErrListeners.delete(fn); };
+}
+
+function reportWriteError(entity: string, err: unknown): void {
+  const message = err instanceof Error ? err.message : String(err);
+  const now = Date.now();
+  const sig = `${entity}:${message}`;
+  if (sig === lastErrSig && now - lastErrAt < 3000) return;
+  lastErrSig = sig;
+  lastErrAt = now;
+  const evt: WriteError = { entity, message, at: now };
+  writeErrListeners.forEach((fn) => { try { fn(evt); } catch { /* 监听器异常不传染 */ } });
+}
+
+/** 单条业务写入与 outbox 原子提交。失败统一上报全局 Toast(O4:原先 void 调用方静默失败)后原样上抛,
+ *  有 catch 的调用方(设置/待确认池等)自身提示不受影响。 */
 export async function saveLocal(
   entity: EntityKind,
   row: Record<string, unknown>,
@@ -48,10 +71,15 @@ export async function saveLocal(
 ): Promise<void> {
   const table = TABLE_BY_ENTITY[entity];
   if (!table) throw new Error(`不支持本地写入实体: ${entity}`);
-  await db.transaction('rw', table, db.outbox, async () => {
-    await table.put(row as never);
-    await enqueue(entity, row, op, base);
-  });
+  try {
+    await db.transaction('rw', table, db.outbox, async () => {
+      await table.put(row as never);
+      await enqueue(entity, row, op, base);
+    });
+  } catch (err) {
+    reportWriteError(entity, err);
+    throw err;
+  }
 }
 
 async function applyServerRow(entity: EntityKind, row: Record<string, unknown>): Promise<boolean> {
