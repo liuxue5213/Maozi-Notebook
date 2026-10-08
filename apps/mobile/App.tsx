@@ -1,8 +1,9 @@
 import './src/lib/polyfills'; // 必须最先:uuid@14 裸用全局 crypto,Hermes 没有,必须先垫上
 import { buildBudgetModel, netSavings, type BudgetModel } from '@ledgerone/ledger-core';
-import { isValidAmount, parseTextLedger, reconcileTextLedger, renderTextLedger, billingCycleRange, daysUntilDue, accountBalance, isLiability, dedupeHash } from '@ledgerone/domain';
+import { isValidAmount, parseTextLedger, reconcileTextLedger, renderTextLedger, billingCycleRange, daysUntilDue, accountBalance, isLiability, dedupeHash, buildCsv, exportFileName } from '@ledgerone/domain';
 import React, { useCallback, useEffect, useState } from 'react';
-import { AppState, BackHandler, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import * as SecureStore from 'expo-secure-store';
+import { AppState, BackHandler, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { formatAmount, newId, type TransactionRow, type TransactionType } from '@ledgerone/domain';
 import { useSyncExternalStore } from 'react';
@@ -416,7 +417,7 @@ function ImportScreen({ onBack }: { onBack: () => void }) {
   );
 }
 
-/** 循环记账:规则列表 + 新建 + 打开时补跑到期生成(SQLite 版引擎) */
+/** 周期记账:规则列表 + 新建 + 打开时补跑到期生成(SQLite 版引擎) */
 function RecurringScreen({ onBack }: { onBack: () => void }) {
   const [rules, setRules] = useState<Array<Record<string, unknown>>>([]);
   const [creating, setCreating] = useState(false);
@@ -474,7 +475,7 @@ function RecurringScreen({ onBack }: { onBack: () => void }) {
     <View style={{ flex: 1, backgroundColor: '#f6f7f9' }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', paddingTop: 50, paddingHorizontal: 12, paddingBottom: 8 }}>
         <Pressable onPress={onBack}><Text style={{ fontSize: 16, color: '#4361ee' }}>‹ 返回</Text></Pressable>
-        <Text style={{ flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '700', color: '#1a1c23' }}>循环记账</Text>
+        <Text style={{ flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '700', color: '#1a1c23' }}>周期记账</Text>
         <Pressable onPress={() => setCreating((v) => !v)}><Text style={{ fontSize: 20, color: '#4361ee' }}>＋</Text></Pressable>
       </View>
       {generated !== null && generated > 0 && (
@@ -616,7 +617,7 @@ function LockGate({ children }: { children: React.ReactNode }) {
 
 function AppInner() {
   const insets = useSafeAreaInsets();
-  const [sub, setSub] = useState<'none' | 'cats' | 'savings' | 'import' | 'recurring' | 'ledgers' | 'export' | 'accounts' | 'settings' | 'dead'>('none');
+  const [sub, setSub] = useState<'none' | 'cats' | 'savings' | 'import' | 'recurring' | 'ledgers' | 'export' | 'accounts' | 'settings' | 'dead' | 'safety'>('none');
   const [ledgerEpoch, setLedgerEpoch] = useState(0);
   const [drillCat, setDrillCat] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -696,6 +697,7 @@ function AppInner() {
   if (sub === 'accounts') return <AccountsScreen onBack={() => { setSub('none'); setLedgerEpoch((e) => e + 1); }} />;
   if (sub === 'settings') return <AccountSettings onBack={() => setSub('none')} onLogged={() => { setSub('none'); setLogged(false); setLedgerEpoch((e) => e + 1); }} />;
   if (sub === 'dead') return <DeadLetterScreen onBack={() => setSub('none')} />;
+  if (sub === 'safety') return <SafetyScreen onBack={() => setSub('none')} onOpenDead={() => setSub('dead')} />;
   return (
     <View style={[styles.app, { paddingTop: insets.top }]}>
       <Text style={styles.title}>帽子记账本</Text>
@@ -705,7 +707,7 @@ function AppInner() {
         )}
         {tab === 'list' && <ListScreen drillCat={drillCat} onClearDrill={() => setDrillCat(null)} />}
         {tab === 'report' && <ReportScreen onDrill={(catId) => { setDrillCat(catId); setTab('list'); }} />}
-        {tab === 'me' && <MeScreen key={`me${ledgerEpoch}`} logged={logged} onLogged={(v) => setLogged(v)} onOpen={(p) => setSub(p)} syncText={`${sync.state}${sync.pending > 0 ? ` · 待同步 ${sync.pending}` : ''}`} />}
+        {tab === 'me' && <MeScreen key={`me${ledgerEpoch}`} logged={logged} onLogged={(v) => setLogged(v)} onOpen={(p) => setSub(p)} syncText={`${sync.state === 'idle' ? '正常' : sync.state === 'syncing' ? '同步中' : `失败:${sync.lastError ?? ''}`}${sync.pending > 0 ? ` · 待同步 ${sync.pending}` : ''}`} lastSyncAt={sync.lastSyncAt} onSync={() => void engine.syncOnce()} />}
       </View>
       <View style={[styles.tabbar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
         {([
@@ -1754,7 +1756,7 @@ function ExportLedger({ onBack }: { onBack: () => void }) {
     <View style={{ flex: 1, backgroundColor: '#f6f7f9' }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', paddingTop: 50, paddingHorizontal: 12, paddingBottom: 8 }}>
         <Pressable onPress={onBack}><Text style={{ fontSize: 16, color: '#4361ee' }}>‹ 返回</Text></Pressable>
-        <Text style={{ flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '700', color: '#1a1c23' }}>手写账导出</Text>
+        <Text style={{ flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '700', color: '#1a1c23' }}>导出与备份</Text>
         <Text style={{ fontSize: 16, color: 'transparent' }}>‹</Text>
       </View>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingBottom: 6 }}>
@@ -1768,15 +1770,114 @@ function ExportLedger({ onBack }: { onBack: () => void }) {
         <View style={{ backgroundColor: '#fff', borderRadius: 10, padding: 10 }}>
           <Text style={{ fontSize: 12, color: '#1a1c23', fontFamily: 'monospace' }}>{text || (busy ? '生成中…' : '本月无支出')}</Text>
         </View>
+        <Text style={{ fontSize: 12, fontWeight: '700', color: '#1a1c23' }}>📄 手写账文本</Text>
         <Pressable style={styles.saveBtn} onPress={() => { void import('react-native').then((rn) => void rn.Share.share({ message: text })); }}>
           <Text style={styles.saveText}>分享 / 复制文本</Text>
         </Pressable>
         <Text style={{ fontSize: 11, color: '#8a93a5', textAlign: 'center' }}>分享面板里可选择"拷贝到备忘录"等实现复制</Text>
+        <CsvExportSection monthOffset={monthOffset} />
       </ScrollView>
     </View>
   );
 }
 
+
+/** CSV 导出(T-23):列与 Web buildCsv 完全一致(BOM/转义/公式注入防护下沉 @ledgerone/domain 共享);
+ *  经系统分享面板交付(免原生文件依赖),文件名规范同 Web。 */
+function CsvExportSection({ monthOffset }: { monthOffset: number }) {
+  const [scope, setScope] = useState<'month' | 'all'>('month');
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+
+  const share = (name: string, csv: string) => {
+    void import('react-native').then((rn) => void rn.Share.share({ message: csv, title: name }));
+    setDone(name);
+  };
+
+  const exportCsv = (kind: 'tx' | 'acc' | 'cat') => {
+    void (async () => {
+      setBusy(true);
+      try {
+        await initDb();
+        const ledgerId = await getActiveLedgerId();
+        const ledger = (await db.getAllAsync<{ name: string }>('SELECT name FROM ledgers WHERE id = ?', [ledgerId]))[0];
+        const ledgerName = String(ledger?.name ?? '账本');
+        const mr = monthRange(monthOffset);
+        const start = scope === 'month' ? mr.start : 0;
+        const end = scope === 'month' ? mr.end : Date.now() + 86_399_000;
+        const rn = await import('react-native');
+        if (kind === 'tx') {
+          const cats = await db.getAllAsync<{ id: string; name: string }>('SELECT id, name FROM categories WHERE is_deleted = 0');
+          const accs = await db.getAllAsync<{ id: string; name: string }>('SELECT id, name FROM accounts WHERE is_deleted = 0');
+          const catMap = new Map(cats.map((c) => [c.id, c.name]));
+          const accMap = new Map(accs.map((a) => [a.id, a.name]));
+          const rows = await db.getAllAsync<{ happened_at: number; type: string; amount: string; currency: string; amount_base: string; category_id: string | null; account_id: string | null; to_account_id: string | null; note: string | null; source: string }>(
+            'SELECT happened_at, type, amount, currency, amount_base, category_id, account_id, to_account_id, note, source FROM transactions WHERE is_deleted = 0 AND ledger_id = ? AND happened_at >= ? AND happened_at < ? ORDER BY happened_at', [ledgerId, start, end]);
+          const csv = buildCsv(
+            ['时间', '类型', '金额', '币种', '折算金额', '分类', '账户', '转账目标账户', '备注', '来源'],
+            rows.map((t) => [
+              new Date(Number(t.happened_at)).toLocaleString('zh-CN'),
+              t.type === 'expense' ? '支出' : t.type === 'income' ? '收入' : '转账',
+              t.amount, t.currency, t.amount_base,
+              t.category_id ? (catMap.get(t.category_id) ?? '') : '',
+              t.account_id ? (accMap.get(t.account_id) ?? '') : '',
+              t.to_account_id ? (accMap.get(t.to_account_id) ?? '') : '',
+              t.note ?? '', t.source,
+            ]));
+          share(exportFileName(ledgerName, start, end - 1), csv);
+        } else if (kind === 'acc') {
+          const accs = await db.getAllAsync<{ id: string; name: string; type: string; initial_balance: string; currency: string; include_in_net: number | boolean; is_archived: number | boolean }>(
+            'SELECT id, name, type, initial_balance, currency, include_in_net, is_archived FROM accounts WHERE is_deleted = 0 AND ledger_id = ? ORDER BY sort', [ledgerId]);
+          const txs = await db.getAllAsync<never>('SELECT * FROM transactions WHERE is_deleted = 0 AND ledger_id = ?', [ledgerId]);
+          const TYPE_NAME: Record<string, string> = { cash: '现金', debit_card: '储蓄卡', credit_card: '信用卡', payable: '应付款' };
+          const csv = buildCsv(
+            ['名称', '类型', '初始余额', '当前余额', '币种', '计入净值', '已归档'],
+            accs.map((a) => [
+              a.name, TYPE_NAME[a.type] ?? a.type, a.initial_balance,
+              accountBalance(String(a.initial_balance ?? '0'), String(a.id), txs),
+              a.currency,
+              (a.include_in_net ? 1 : 0) === 1 ? '是' : '否',
+              (a.is_archived ? 1 : 0) === 1 ? '是' : '否',
+            ]));
+          share(exportFileName(`${ledgerName}_账户`, start, end - 1), csv);
+        } else {
+          const cats = await db.getAllAsync<{ name: string; parent_id: string | null; kind: string; icon: string | null }>(
+            'SELECT name, parent_id, kind, icon FROM categories WHERE is_deleted = 0 AND ledger_id = ? ORDER BY sort', [ledgerId]);
+          const csv = buildCsv(
+            ['名称', '层级', '收支', '图标'],
+            cats.map((c) => [c.name, c.parent_id ? '二级' : '一级', c.kind === 'expense' ? '支出' : '收入', c.icon ?? '']));
+          share(exportFileName(`${ledgerName}_分类`, start, end - 1), csv);
+        }
+      } finally { setBusy(false); }
+    })();
+  };
+
+  const Chip = ({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) => (
+    <Pressable onPress={onPress} style={{ flex: 1, paddingVertical: 8, borderRadius: 10, alignItems: 'center', backgroundColor: active ? '#4361ee' : '#eef0f6' }}>
+      <Text style={{ fontSize: 12, color: active ? '#fff' : '#4a5160' }}>{label}</Text>
+    </Pressable>
+  );
+
+  return (
+    <View style={{ backgroundColor: '#fff', borderRadius: 10, padding: 10, gap: 8 }}>
+      <Text style={{ fontSize: 12, fontWeight: '700', color: '#1a1c23' }}>📊 CSV 导出(与 Web 同格式)</Text>
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <Chip label="本月" active={scope === 'month'} onPress={() => setScope('month')} />
+        <Chip label="全部" active={scope === 'all'} onPress={() => setScope('all')} />
+      </View>
+      <Pressable style={[styles.saveBtn, busy && styles.disabled]} disabled={busy} onPress={() => exportCsv('tx')}>
+        <Text style={styles.saveText}>导出流水 CSV</Text>
+      </Pressable>
+      <Pressable style={[styles.saveBtn, busy && styles.disabled]} disabled={busy} onPress={() => exportCsv('acc')}>
+        <Text style={styles.saveText}>导出账户 CSV</Text>
+      </Pressable>
+      <Pressable style={[styles.saveBtn, busy && styles.disabled]} disabled={busy} onPress={() => exportCsv('cat')}>
+        <Text style={styles.saveText}>导出分类 CSV</Text>
+      </Pressable>
+      {done && <Text style={{ fontSize: 11, color: '#8a93a5', textAlign: 'center' }}>已生成 {done},在分享面板选择保存/拷贝目标</Text>}
+    </View>
+  );
+}
 
 /** 账户与资产(T-16/T-28):列表+余额、新增/编辑、净值汇总、信用卡一键还款(transfer) */
 function AccountsScreen({ onBack }: { onBack: () => void }) {
@@ -2074,19 +2175,9 @@ function DeadLetterScreen({ onBack }: { onBack: () => void }) {
 }
 
 
-function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onLogged: (v: boolean) => void; syncText: string; onOpen: (p: 'cats' | 'savings' | 'import' | 'recurring' | 'ledgers' | 'export' | 'accounts' | 'settings' | 'dead') => void }) {
-  const [server, setServer] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+/** 安全与隐私(与 Web 安全页对齐):应用锁/生物识别/PIN、隐私开关、同步诊断入口 */
+function SafetyScreen({ onBack, onOpenDead }: { onBack: () => void; onOpenDead: () => void }) {
   const [msg, setMsg] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const [me, setMe] = useState<{ email?: string | null; nickname?: string | null } | null>(null);
-  // N-1:生物识别不可用时必须由用户自设 PIN,禁止写入默认口令
-  const [pinSetup, setPinSetup] = useState(false);
-  const [pinNew, setPinNew] = useState('');
-  const [pinConfirm, setPinConfirm] = useState('');
-  // 应用锁设置面板:总开关状态 / 生效方式 / 生物识别硬件与用户开关 / PIN 存在与修改
   const [lockOn, setLockOn] = useState(false);
   const [lockMode, setLockMode] = useState<'pin' | 'biometric'>('pin');
   const [bioAvail, setBioAvail] = useState(false);
@@ -2094,6 +2185,11 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
   const [pinExists, setPinExists] = useState(false);
   const [pinMode, setPinMode] = useState<'setup' | 'change'>('setup');
   const [pinOld, setPinOld] = useState('');
+  const [pinNew, setPinNew] = useState('');
+  const [pinConfirm, setPinConfirm] = useState('');
+  const [pinSetup, setPinSetup] = useState(false);
+  const [privStat, setPrivStat] = useState(false);
+  const [privCrash, setPrivCrash] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -2102,8 +2198,131 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
       setBioOff(await isBiometricDisabled());
       setPinExists(await hasPin());
       setLockMode(await activeLockMode());
+      setPrivStat((await SecureStore.getItemAsync('priv_stat')) === '1');
+      setPrivCrash((await SecureStore.getItemAsync('priv_crash')) === '1');
     })();
   }, []);
+
+  const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(null), 3000); };
+
+  return (
+    <ScrollView contentContainerStyle={styles.form}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', paddingTop: 50, paddingHorizontal: 12, paddingBottom: 8 }}>
+        <Pressable onPress={onBack}><Text style={{ fontSize: 16, color: '#4361ee' }}>‹ 返回</Text></Pressable>
+        <Text style={{ flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '700', color: '#1a1c23' }}>安全与隐私</Text>
+        <Text style={{ fontSize: 16, color: 'transparent' }}>‹</Text>
+      </View>
+      <Pressable style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fff', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 14 }}
+        onPress={() => {
+          void (async () => {
+            if (await isLockEnabled()) {
+              await disableLock(); setPinSetup(false); setLockOn(false); flash('应用锁已关闭');
+            } else {
+              await enableLock();
+              const mode = await activeLockMode();
+              setLockOn(true); setLockMode(mode);
+              if (mode === 'biometric') flash('应用锁已开启(面容/指纹),可在下方自由切换或关闭');
+              else { setPinMode('setup'); setPinSetup(true); return; }
+            }
+          })();
+        }}>
+        <Text style={{ fontSize: 13, color: '#1a1c23' }}>🔒 应用锁(生物识别 / PIN)</Text>
+        <Text style={{ fontSize: 12, color: lockOn ? '#1f9d6c' : '#8a93a5' }}>{lockOn ? `开启中(${lockMode === 'biometric' ? '指纹/面容' : 'PIN'})` : '点按开启'}</Text>
+      </Pressable>
+      {lockOn && bioAvail && (
+        <Pressable style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fff', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 14 }}
+          onPress={() => {
+            void (async () => {
+              if (!bioOff) {
+                await setBiometricDisabled(true); setBioOff(true); setLockMode('pin');
+                if (!(await hasPin())) { setPinMode('setup'); setPinSetup(true); }
+                flash('生物识别已关闭,改用 PIN 解锁');
+              } else {
+                await setBiometricDisabled(false); setBioOff(false); setLockMode('biometric');
+                flash('生物识别已开启,下次解锁生效');
+              }
+            })();
+          }}>
+          <Text style={{ fontSize: 13, color: '#1a1c23' }}>☝️ 生物识别(指纹/面容)</Text>
+          <Text style={{ fontSize: 12, color: bioOff ? '#8a93a5' : '#1f9d6c' }}>{bioOff ? '已关闭 · 用 PIN' : '已开启 · 点按关闭'}</Text>
+        </Pressable>
+      )}
+      {lockOn && (
+        <Pressable style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fff', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 14 }}
+          onPress={() => { setPinMode(pinExists ? 'change' : 'setup'); setPinOld(''); setPinNew(''); setPinConfirm(''); setPinSetup(true); }}>
+          <Text style={{ fontSize: 13, color: '#1a1c23' }}>🔑 {pinExists ? '修改 PIN' : '设置 PIN'}</Text>
+          <Text style={{ fontSize: 12, color: '#8a93a5' }}>{pinExists ? '需验证当前 PIN' : '4–8 位数字'}</Text>
+        </Pressable>
+      )}
+      {pinSetup && (
+        <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 14, gap: 8 }}>
+          <Text style={{ fontSize: 13, fontWeight: '700', color: '#1a1c23' }}>{pinMode === 'change' ? '修改 PIN' : '设置应用锁 PIN(4–8 位数字)'}</Text>
+          {pinMode === 'change' && (
+            <TextInput style={styles.input} value={pinOld} onChangeText={(t) => setPinOld(t.replace(/[^\d]/g, '').slice(0, 8))} keyboardType="number-pad" secureTextEntry placeholder="输入当前 PIN" placeholderTextColor="#b4bac6" />
+          )}
+          <TextInput style={styles.input} value={pinNew} onChangeText={(t) => setPinNew(t.replace(/[^\d]/g, '').slice(0, 8))} keyboardType="number-pad" secureTextEntry placeholder="输入新 PIN" placeholderTextColor="#b4bac6" />
+          <TextInput style={styles.input} value={pinConfirm} onChangeText={(t) => setPinConfirm(t.replace(/[^\d]/g, '').slice(0, 8))} keyboardType="number-pad" secureTextEntry placeholder="再次输入确认" placeholderTextColor="#b4bac6" />
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <Pressable
+              style={{ flex: 1, backgroundColor: pinNew.length >= 4 && pinNew === pinConfirm ? '#4361ee' : '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center', opacity: pinNew.length >= 4 && pinNew === pinConfirm ? 1 : 0.5 }}
+              disabled={pinNew.length < 4 || pinNew !== pinConfirm}
+              onPress={() => {
+                void (async () => {
+                  if (pinMode === 'change') {
+                    const r = await verifyPin(pinOld);
+                    if (r === 'wrong') { flash('当前 PIN 错误'); return; }
+                    if (r === 'locked') { flash('失败次数过多,请 60 秒后再试'); return; }
+                  }
+                  await setPin(pinNew);
+                  setPinSetup(false); setPinNew(''); setPinConfirm(''); setPinOld('');
+                  setPinExists(true); setLockMode('pin'); setLockOn(true);
+                  flash(pinMode === 'change' ? 'PIN 已修改' : '应用锁已开启(PIN)');
+                })();
+              }}>
+              <Text style={{ fontSize: 13, color: pinNew.length >= 4 && pinNew === pinConfirm ? '#fff' : '#8a93a5' }}>确认</Text>
+            </Pressable>
+            <Pressable
+              style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }}
+              onPress={() => {
+                void (async () => {
+                  if (pinMode === 'setup' && !(await hasPin())) await disableLock();
+                  setLockOn(await isLockEnabled());
+                  setPinSetup(false); setPinNew(''); setPinConfirm(''); setPinOld('');
+                })();
+              }}>
+              <Text style={{ fontSize: 13, color: '#4a5160' }}>取消</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
+      <Text style={{ fontSize: 13, fontWeight: '700', color: '#1a1c23', marginTop: 8 }}>隐私开关</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fff', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 14 }}>
+        <Text style={{ fontSize: 13, color: '#1a1c23' }}>行为统计</Text>
+        <Switch value={privStat} onValueChange={(v) => { setPrivStat(v); void SecureStore.setItemAsync('priv_stat', v ? '1' : '0'); }} />
+      </View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fff', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 14 }}>
+        <Text style={{ fontSize: 13, color: '#1a1c23' }}>崩溃上报</Text>
+        <Switch value={privCrash} onValueChange={(v) => { setPrivCrash(v); void SecureStore.setItemAsync('priv_crash', v ? '1' : '0'); }} />
+      </View>
+      <Text style={{ fontSize: 11, color: '#8a93a5' }}>两项暂未接入统计/上报 SDK,开关仅记录偏好(与 Web 口径一致)</Text>
+      <Pressable style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fff', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 14, marginTop: 8 }}
+        onPress={onOpenDead}>
+        <Text style={{ fontSize: 13, color: '#1a1c23' }}>🩺 同步诊断(死信)</Text>
+        <Text style={{ fontSize: 12, color: '#8a93a5' }}>导出 · 清空 ›</Text>
+      </Pressable>
+      {msg && <Text style={{ fontSize: 12, color: '#1f9d6c' }}>{msg}</Text>}
+    </ScrollView>
+  );
+}
+
+function MeScreen({ logged, onLogged, syncText, lastSyncAt, onSync, onOpen }: { logged: boolean; onLogged: (v: boolean) => void; syncText: string; lastSyncAt: number | null; onSync: () => void; onOpen: (p: 'cats' | 'savings' | 'import' | 'recurring' | 'ledgers' | 'export' | 'accounts' | 'settings' | 'dead' | 'safety') => void }) {
+  const [server, setServer] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const [me, setMe] = useState<{ email?: string | null; nickname?: string | null } | null>(null);
 
   useEffect(() => {
     void initDb().then(async () => {
@@ -2192,128 +2411,33 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
       <Text style={styles.meTitle}>{logged ? `${me?.nickname || me?.email || '已登录'} · 云同步开启` : '未登录 · 纯本地模式'}</Text>
       <Text style={styles.muted}>离线也能记账:数据先存本机,连上服务器后自动同步</Text>
       <Text style={styles.muted}>同步状态:{syncText}</Text>
-      <View style={{ flexDirection: 'row', gap: 8, marginTop: 10, marginBottom: 4 }}>
-        <Pressable style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('cats')}>
-          <Text style={{ fontSize: 13, color: '#1a1c23' }}>🗂 分类管理</Text>
+      {/* 菜单与 Web「我的」页同构(顺序/命名/副标题一致) */}
+      {([
+        ['待确认池 📥', '导入账单 · 去重确认', 'import'],
+        ['存钱计划 🐷', '目标 · 净结余进度', 'savings'],
+        ['账本管理 📚', '多账本 · 切换 · 新建', 'ledgers'],
+        ['分类管理 🏷️', '自定义 · 隐藏 · 删除', 'cats'],
+        ['周期记账 🔁', '房租工资自动记', 'recurring'],
+        ['账户与资产 💼', '余额 · 净值', 'accounts'],
+        ['账号设置 ⚙️', '昵称 · 主币种 · 注销', 'settings'],
+        ['导出与备份 📄', '手写账 · CSV', 'export'],
+        ['安全与隐私 🔒', '应用锁 · 隐私 · 死信', 'safety'],
+      ] as Array<[string, string, 'import' | 'savings' | 'ledgers' | 'cats' | 'recurring' | 'accounts' | 'settings' | 'export' | 'safety']>).map(([label, hint, key]) => (
+        <Pressable key={key} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fff', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 14, marginBottom: 2 }}
+          onPress={() => onOpen(key)}>
+          <Text style={{ fontSize: 13, color: '#1a1c23' }}>{label}</Text>
+          <Text style={{ fontSize: 12, color: '#8a93a5' }}>{hint} ›</Text>
         </Pressable>
-        <Pressable style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('savings')}>
-          <Text style={{ fontSize: 13, color: '#1a1c23' }}>🐷 存钱计划</Text>
-        </Pressable>
-      </View>
-      <View style={{ flexDirection: 'row', gap: 8 }}>
-        <Pressable style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('import')}>
-          <Text style={{ fontSize: 13, color: '#1a1c23' }}>📥 导入账单</Text>
-        </Pressable>
-        <Pressable style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('recurring')}>
-          <Text style={{ fontSize: 13, color: '#1a1c23' }}>🔁 循环记账</Text>
-        </Pressable>
-      </View>
-      <View style={{ flexDirection: 'row', gap: 8 }}>
-        <Pressable style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('ledgers')}>
-          <Text style={{ fontSize: 13, color: '#1a1c23' }}>📚 账本管理</Text>
-        </Pressable>
-        <Pressable style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('export')}>
-          <Text style={{ fontSize: 13, color: '#1a1c23' }}>📄 手写账导出</Text>
-        </Pressable>
-      </View>
-      <View style={{ flexDirection: 'row', gap: 8 }}>
-        <Pressable style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('accounts')}>
-          <Text style={{ fontSize: 13, color: '#1a1c23' }}>💼 账户与资产</Text>
-        </Pressable>
-      </View>
-      <Pressable style={{ backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('settings')}>
-        <Text style={{ fontSize: 13, color: '#1a1c23' }}>⚙️ 账号设置</Text>
-      </Pressable>
-      <Pressable style={{ backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} onPress={() => onOpen('dead')}>
-        <Text style={{ fontSize: 13, color: '#1a1c23' }}>🩺 同步诊断(死信)</Text>
-      </Pressable>
-      <Pressable style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12 }}
-        onPress={() => {
-          void (async () => {
-            if (await isLockEnabled()) {
-              await disableLock(); setPinSetup(false); setLockOn(false); setMsg('应用锁已关闭');
-            } else {
-              await enableLock();
-              const mode = await activeLockMode();
-              setLockOn(true); setLockMode(mode);
-              if (mode === 'biometric') setMsg('应用锁已开启(面容/指纹),可在下方自由切换或关闭');
-              else { setPinMode('setup'); setPinSetup(true); return; } // 无生物识别 → 进入自设 PIN 流程
-            }
-            setTimeout(() => setMsg(null), 3000);
-          })();
-        }}>
-        <Text style={{ fontSize: 13, color: '#1a1c23' }}>🔒 应用锁(生物识别 / PIN)</Text>
-        <Text style={{ fontSize: 12, color: lockOn ? '#1f9d6c' : '#8a93a5' }}>{lockOn ? `开启中(${lockMode === 'biometric' ? '指纹/面容' : 'PIN'})` : '点按开启'}</Text>
-      </Pressable>
-      {lockOn && bioAvail && (
-        <Pressable style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12 }}
-          onPress={() => {
-            void (async () => {
-              if (!bioOff) {
-                await setBiometricDisabled(true); setBioOff(true); setLockMode('pin');
-                if (!(await hasPin())) { setPinMode('setup'); setPinSetup(true); }
-                setMsg('生物识别已关闭,改用 PIN 解锁');
-              } else {
-                await setBiometricDisabled(false); setBioOff(false); setLockMode('biometric');
-                setMsg('生物识别已开启,下次解锁生效');
-              }
-              setTimeout(() => setMsg(null), 3000);
-            })();
-          }}>
-          <Text style={{ fontSize: 13, color: '#1a1c23' }}>☝️ 生物识别(指纹/面容)</Text>
-          <Text style={{ fontSize: 12, color: bioOff ? '#8a93a5' : '#1f9d6c' }}>{bioOff ? '已关闭 · 用 PIN' : '已开启 · 点按关闭'}</Text>
-        </Pressable>
-      )}
-      {lockOn && (
-        <Pressable style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12 }}
-          onPress={() => { setPinMode(pinExists ? 'change' : 'setup'); setPinOld(''); setPinNew(''); setPinConfirm(''); setPinSetup(true); }}>
-          <Text style={{ fontSize: 13, color: '#1a1c23' }}>🔑 {pinExists ? '修改 PIN' : '设置 PIN'}</Text>
-          <Text style={{ fontSize: 12, color: '#8a93a5' }}>{pinExists ? '需验证当前 PIN' : '4–8 位数字'}</Text>
-        </Pressable>
-      )}
-      {pinSetup && (
-        <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 14, gap: 8 }}>
-          <Text style={{ fontSize: 13, fontWeight: '700', color: '#1a1c23' }}>{pinMode === 'change' ? '修改 PIN' : '设置应用锁 PIN(4–8 位数字)'}</Text>
-          {pinMode === 'change' && (
-            <TextInput style={styles.input} value={pinOld} onChangeText={(t) => setPinOld(t.replace(/[^\d]/g, '').slice(0, 8))} keyboardType="number-pad" secureTextEntry placeholder="输入当前 PIN" placeholderTextColor="#b4bac6" />
-          )}
-          <TextInput style={styles.input} value={pinNew} onChangeText={(t) => setPinNew(t.replace(/[^\d]/g, '').slice(0, 8))} keyboardType="number-pad" secureTextEntry placeholder="输入新 PIN" placeholderTextColor="#b4bac6" />
-          <TextInput style={styles.input} value={pinConfirm} onChangeText={(t) => setPinConfirm(t.replace(/[^\d]/g, '').slice(0, 8))} keyboardType="number-pad" secureTextEntry placeholder="再次输入确认" placeholderTextColor="#b4bac6" />
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            <Pressable
-              style={{ flex: 1, backgroundColor: pinNew.length >= 4 && pinNew === pinConfirm ? '#4361ee' : '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center', opacity: pinNew.length >= 4 && pinNew === pinConfirm ? 1 : 0.5 }}
-              disabled={pinNew.length < 4 || pinNew !== pinConfirm}
-              onPress={() => {
-                void (async () => {
-                  if (pinMode === 'change') {
-                    const r = await verifyPin(pinOld);
-                    if (r === 'wrong') { setMsg('当前 PIN 错误'); setTimeout(() => setMsg(null), 2500); return; }
-                    if (r === 'locked') { setMsg('失败次数过多,请 60 秒后再试'); setTimeout(() => setMsg(null), 2500); return; }
-                  }
-                  await setPin(pinNew);
-                  setPinSetup(false); setPinNew(''); setPinConfirm(''); setPinOld('');
-                  setPinExists(true); setLockMode('pin'); setLockOn(true);
-                  setMsg(pinMode === 'change' ? 'PIN 已修改' : '应用锁已开启(PIN)');
-                  setTimeout(() => setMsg(null), 2500);
-                })();
-              }}>
-              <Text style={{ fontSize: 13, color: pinNew.length >= 4 && pinNew === pinConfirm ? '#fff' : '#8a93a5' }}>确认</Text>
-            </Pressable>
-            <Pressable
-              style={{ flex: 1, backgroundColor: '#eef0f6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }}
-              onPress={() => {
-                void (async () => {
-                  // 未设完即取消:仅在「开启流程中」回滚锁状态,避免留下无口令的锁;修改 PIN 的取消不动现有锁
-                  if (pinMode === 'setup' && !(await hasPin())) await disableLock();
-                  setLockOn(await isLockEnabled());
-                  setPinSetup(false); setPinNew(''); setPinConfirm(''); setPinOld('');
-                })();
-              }}>
-              <Text style={{ fontSize: 13, color: '#4a5160' }}>取消</Text>
-            </Pressable>
-          </View>
+      ))}
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fff', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 14, marginTop: 8 }}>
+        <View style={{ flex: 1 }}>
+          <Text style={{ fontSize: 13, color: '#1a1c23' }}>同步状态</Text>
+          <Text style={{ fontSize: 11, color: '#8a93a5', marginTop: 2 }} numberOfLines={1}>{syncText}{lastSyncAt ? ` · 上次 ${new Date(lastSyncAt).toLocaleTimeString('zh-CN')}` : ''}</Text>
         </View>
-      )}
+        <Pressable style={{ backgroundColor: '#4361ee', borderRadius: 10, paddingVertical: 8, paddingHorizontal: 14 }} onPress={onSync}>
+          <Text style={{ color: '#fff', fontSize: 12 }}>立即同步</Text>
+        </Pressable>
+      </View>
       {!logged && (
         <>
           <Text style={styles.label}>服务器</Text>
@@ -2347,9 +2471,6 @@ function MeScreen({ logged, onLogged, syncText, onOpen }: { logged: boolean; onL
       )}
       {logged && (
         <>
-          <Pressable style={styles.saveBtn} onPress={() => void engine.syncOnce()}>
-            <Text style={styles.saveText}>立即同步</Text>
-          </Pressable>
           <Pressable style={[styles.saveBtn, styles.logout]} onPress={() => void logout()}>
             <Text style={[styles.saveText, { color: '#e5484d' }]}>退出登录(本地数据保留)</Text>
           </Pressable>
