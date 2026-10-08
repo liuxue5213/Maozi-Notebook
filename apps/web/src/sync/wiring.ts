@@ -196,7 +196,30 @@ export async function prepareAfterLogin(): Promise<void> {
   if (txCount === 0 && outCount === 0) {
     await wipeLocal();
   }
-  await engine.syncOnce();
+  // 幽灵账本工厂关闭(2026-10-09):全新安装后本地游标为 0 时改「先拉后推」,
+  // 推送前丢弃从未上行的空种子账本(有真实流水的离线账本不受影响)
+  const freshInstall = Number(((await db.meta.get('sync_cursor'))?.value as number) ?? 0) === 0;
+  const dropUnsyncedSeed = async (): Promise<void> => {
+    const unsynced = await db.ledgers.filter((l) => l.server_version == null).toArray();
+    const hasServer = await db.ledgers.filter((l) => l.server_version != null && !l.is_deleted).count();
+    if (!unsynced.length || !hasServer) return;
+    for (const l of unsynced) {
+      const hasTx = await db.transactions.where('ledger_id').equals(l.id).count();
+      if (hasTx > 0) continue; // 有流水的离线账本是真实数据,保留
+      await db.transaction('rw', [db.ledgers, db.transactions, db.categories, db.accounts, db.budgets, db.budget_items, db.recurring_rules, db.savings_plans], async () => {
+        await db.transactions.where('ledger_id').equals(l.id).delete();
+        await db.categories.where('ledger_id').equals(l.id).delete();
+        await db.accounts.where('ledger_id').equals(l.id).delete();
+        await db.budgets.where('ledger_id').equals(l.id).delete();
+        await db.budget_items.where('ledger_id').equals(l.id).delete();
+        await db.recurring_rules.where('ledger_id').equals(l.id).delete();
+        await db.savings_plans.where('ledger_id').equals(l.id).delete();
+        await db.ledgers.delete(l.id);
+      });
+    }
+    await db.meta.put({ key: 'active_ledger', value: '' }); // 触发兜底重选最早有效账本
+  };
+  await engine.syncOnce({ pullFirst: freshInstall, beforePush: dropUnsyncedSeed });
   // T-35 首登对齐(与移动端同口径):登录同步完成后,当前账本对齐到该账号「最早创建的已同步账本」。
   // 否则 Web 本地播种的新账本(以及换设备后各自新建的账本)会把两端各锁在各自的账本里——
   // 双端各自 push/pull 正常、徽章显示「同步完成」,内容却完全不同(数据不同步的典型根因)。

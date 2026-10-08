@@ -59,14 +59,27 @@ export class SyncEngine {
     this.emit({ pending: await this.deps.queue.count() });
   }
 
-  async syncOnce(): Promise<void> {
+  /**
+   * 单轮同步。opts.pullFirst:先拉后推——用于「全新安装后首次登录」:
+   * 默认先推会把本地播种的空壳账本上行,在服务端制造幽灵账本并让两端各锁各的账本;
+   * 先拉后推 + beforePush 钩子丢弃从未上行的本地种子,从引擎层关闭幽灵账本工厂。
+   * 注意:上行未定案时不能推进下行游标(待推送行会被 RowSink 跳过造成永久漏拉),
+   * 因此 pullFirst 仅限首登空库场景(cursor=0 时无未定案上行)。
+   */
+  async syncOnce(opts?: { pullFirst?: boolean; beforePush?: () => Promise<void> }): Promise<void> {
     if (this.running) return;
     this.running = true;
     try {
       this.emit({ state: 'syncing', lastError: null });
-      // 上行未定案时不能推进下行游标:待推送行会被 RowSink 跳过,之后可能永久漏拉。
-      await this.pushAll();
-      await this.pullAll();
+      if (opts?.pullFirst) {
+        await this.pullAll();
+        if (opts.beforePush) await opts.beforePush();
+        await this.pushAll();
+      } else {
+        // 上行未定案时不能推进下行游标:待推送行会被 RowSink 跳过,之后可能永久漏拉。
+        await this.pushAll();
+        await this.pullAll();
+      }
       this.emit({ state: 'idle', lastSyncAt: Date.now() });
     } catch (e) {
       this.emit({ state: 'error', lastError: e instanceof Error ? e.message : String(e) });

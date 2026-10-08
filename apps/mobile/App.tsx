@@ -2381,7 +2381,31 @@ function MeScreen({ logged, onLogged, syncText, lastSyncAt, onSync, onOpen }: { 
       }
       onLogged(true);
       await initDb(); // 清库后重播种/重初始化
-      await engine.syncOnce();
+      // 幽灵账本工厂关闭(2026-10-09):全新安装/换号后本地游标为 0 时改「先拉后推」,
+      // 并在推送前丢弃从未上行的空种子账本(有真实流水的离线账本不受影响),
+      // 否则种子必被推上云,服务端持续滋生同名幽灵账本、两端各锁各的账本
+      const freshInstall = Number((await metaGet(db, 'sync_cursor')) ?? 0) === 0;
+      await engine.syncOnce({
+        pullFirst: freshInstall,
+        beforePush: async () => {
+          const unsynced = await db.getAllAsync<{ id: string }>(
+            'SELECT id FROM ledgers WHERE server_version IS NULL AND is_deleted = 0');
+          const hasServer = await db.getAllAsync<{ id: string }>(
+            'SELECT id FROM ledgers WHERE server_version IS NOT NULL AND is_deleted = 0 LIMIT 1');
+          if (!unsynced.length || !hasServer.length) return;
+          for (const l of unsynced) {
+            const hasTx = await db.getAllAsync<{ n: number }>(
+              'SELECT COUNT(*) AS n FROM transactions WHERE ledger_id = ?', [l.id]);
+            if (Number(hasTx[0]?.n ?? 0) > 0) continue; // 有流水的离线账本是真实数据,保留
+            for (const t of ['transactions', 'categories', 'accounts', 'budgets', 'budget_items', 'recurring_rules', 'savings_plans']) {
+              await db.runAsync(`DELETE FROM ${t} WHERE ledger_id = ?`, [l.id]);
+            }
+            await db.runAsync('DELETE FROM ledgers WHERE id = ?', [l.id]);
+          }
+          await metaSet(db, 'active_ledger', null);
+          resetInitCache();
+        },
+      });
       // 首登收敛:登录同步完成后,当前账本一律对齐到该账号「最早创建的已同步账本」
       // (与 Web 端默认口径一致)。否则手机本地 seed 的新账本一旦 push 上云就永远不会切换,
       // 造成同账号两端各看各的空账本。
