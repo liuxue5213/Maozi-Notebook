@@ -18,6 +18,10 @@ export class AiService {
   async chat(userContent: string, system = '你是记账应用「帽子记账本」的财务分析助手,用简体中文简洁回答。'): Promise<string> {
     if (!this.key) throw new Error('AI_API_KEY 未配置');
     let res: Response;
+    // P-4 超时:AbortSignal.timeout 需 Node 17.3+(树莓派 Node 版本低会 TypeError→500),
+    // 改用 AbortController + setTimeout 手动实现(Node 15+ 即可)
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8_000);
     try {
       res = await fetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
@@ -30,10 +34,12 @@ export class AiService {
           ],
           stream: false,
         }),
-        signal: AbortSignal.timeout(8_000),
+        signal: ctrl.signal,
       });
     } catch {
       throw new Error('AI 服务超时或不可达,请稍后重试');
+    } finally {
+      clearTimeout(timer);
     }
     if (!res.ok) throw new Error(`AI 上游错误 ${res.status}`);
     let data: { choices?: Array<{ message?: { content?: string } }> };
