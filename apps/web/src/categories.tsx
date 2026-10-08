@@ -3,6 +3,7 @@ import { newId, type CategoryRow } from '@ledgerone/domain';
 import { db } from './db/db';
 import { getActiveLedgerId } from './db/seed';
 import { saveLocal } from './sync/wiring';
+import { alertDialog, confirmDialog, promptDialog } from './ui/dialog';
 
 /**
  * 分类管理(M03 自定义分类,第 15 轮):新建一级/子分类、重命名、隐藏/显示、删除。
@@ -24,7 +25,7 @@ export function CategoryPanel({ onBack }: { onBack: () => void }) {
 
   const create = async (kind: 'expense' | 'income', parentId: string | null = null): Promise<void> => {
     const label = parentId ? '子分类名称' : kind === 'expense' ? '支出分类名称' : '收入分类名称';
-    const name = window.prompt(`${label}(可含 emoji 图标前缀,如「🐾 宠物用品」)`);
+    const name = await promptDialog({ title: label, message: '可含 emoji 图标前缀,如「🐾 宠物用品」', placeholder: '分类名称' });
     if (!name?.trim()) return;
     const siblings = parentId ? children.filter((c) => c.parent_id === parentId) : tops.filter((c) => c.kind === kind);
     const raw = name.trim();
@@ -51,7 +52,7 @@ export function CategoryPanel({ onBack }: { onBack: () => void }) {
   };
 
   const rename = async (c: CategoryRow): Promise<void> => {
-    const name = window.prompt('新的分类名称', c.name);
+    const name = await promptDialog({ title: '新的分类名称', defaultValue: c.name });
     if (!name?.trim() || name.trim() === c.name) return;
     const updated: CategoryRow = { ...c, name: name.trim(), client_version: c.client_version + 1, updated_at: Date.now() };
     await saveLocal('category', updated as unknown as Record<string, unknown>, 'upsert', c as unknown as Record<string, unknown>);
@@ -64,11 +65,11 @@ export function CategoryPanel({ onBack }: { onBack: () => void }) {
 
   const remove = async (c: CategoryRow): Promise<void> => {
     if (c.is_preset) {
-      window.alert('预置分类不可删除,可使用「隐藏」将其从选择器收起。');
+      await alertDialog('预置分类不可删除,可使用「隐藏」将其从选择器收起。');
       return;
     }
     const kids = children.filter((k) => k.parent_id === c.id);
-    if (!window.confirm(`删除「${c.name}」${kids.length ? `及其 ${kids.length} 个子分类` : ''}?已有流水保留原分类引用。`)) return;
+    if (!(await confirmDialog({ message: `删除「${c.name}」${kids.length ? `及其 ${kids.length} 个子分类` : ''}?已有流水保留原分类引用。`, danger: true, confirmText: '删除' }))) return;
     const now = Date.now();
     const tomb = (row: CategoryRow): CategoryRow => ({ ...row, is_deleted: true, deleted_at: now, client_version: row.client_version + 1 });
     for (const k of kids) {

@@ -11,6 +11,7 @@ import { Reports } from './reports';
 import { BudgetCard } from './budget';
 import { AuthModal, MeTab } from './auth';
 import { WriteErrorToast } from './WriteErrorToast';
+import { DialogHost } from './ui/dialog';
 
 type Tab = 'record' | 'list' | 'report' | 'me';
 
@@ -141,6 +142,7 @@ export function App() {
         />
       )}
       <WriteErrorToast />
+      <DialogHost />
     </div>
   );
 }

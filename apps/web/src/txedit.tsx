@@ -6,6 +6,7 @@ import { db } from './db/db';
 import { saveLocal } from './sync/wiring';
 import { fromLocalInputValue, toLocalInputValue } from './utils/period';
 import { getActiveLedgerId } from './db/seed';
+import { confirmDialog } from './ui/dialog';
 
 const TYPE_LABELS: Record<TransactionType, string> = { expense: '支出', income: '收入', transfer: '转账' };
 
@@ -80,7 +81,7 @@ export function TxEditor({ tx, onClose }: { tx: TransactionRow; onClose: () => v
   };
 
   const remove = async () => {
-    if (!window.confirm(`删除该笔 ${cur()}${formatAmount(tx.amount)}?进入回收站保留 30 天,可恢复。`)) return;
+    if (!(await confirmDialog({ message: `删除该笔 ${cur()}${formatAmount(tx.amount)}?进入回收站保留 30 天,可恢复。`, danger: true, confirmText: '删除' }))) return;
     const updated: TransactionRow = {
       ...tx,
       is_deleted: true,

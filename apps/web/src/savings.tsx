@@ -6,6 +6,7 @@ import { netSavings } from '@ledgerone/ledger-core';
 import { db } from './db/db';
 import { getActiveLedgerId } from './db/seed';
 import { saveLocal } from './sync/wiring';
+import { confirmDialog } from './ui/dialog';
 
 const STATUS_LABELS: Record<string, string> = { active: '进行中', paused: '已暂停', achieved: '已达成', archived: '已归档' };
 
@@ -94,7 +95,7 @@ export function SavingsPage({ onBack }: { onBack: () => void }) {
   };
 
   const removePlan = async (p: SavingsPlanRow) => {
-    if (!window.confirm(`删除存钱计划「${p.name}」?(不影响已入账流水)`)) return;
+    if (!(await confirmDialog({ message: `删除存钱计划「${p.name}」?(不影响已入账流水)`, danger: true, confirmText: '删除' }))) return;
     const now = Date.now();
     const del: SavingsPlanRow = { ...p, is_deleted: true, deleted_at: now, client_version: p.client_version + 1, updated_at: now };
     await saveLocal('savings_plan', del as unknown as Record<string, unknown>, 'delete');

@@ -9,6 +9,7 @@ import { db } from './db/db';
 import { getActiveLedgerId } from './db/seed';
 import { saveLocal } from './sync/wiring';
 import { defaultMapping, detectSource, findHeaderLineIndex, parseCsv, type ColumnMapping, decodeCsvText } from './utils/import-csv';
+import { alertDialog, confirmDialog } from './ui/dialog';
 
 /** 待确认池(P08,M05-F04)+ 账单文件导入向导(M05-F01/F02/F05) */
 export function PendingPage({ onBack }: { onBack: () => void }) {
@@ -144,7 +145,7 @@ function autoCategory(merchantNote: string, cats: CategoryRow[]): string | null 
 }
 
 async function confirmAll(rows: PendingTransactionRow[], cats: CategoryRow[], accounts: Array<{ id: string }>): Promise<void> {
-  if (!window.confirm(`确认全部 ${rows.length} 条并计入统计?`)) return;
+  if (!(await confirmDialog({ message: `确认全部 ${rows.length} 条并计入统计?`, confirmText: '全部确认' }))) return;
   await confirmAllSilent(rows, cats, accounts);
 }
 
@@ -306,7 +307,7 @@ function ImportWizard({ onClose, txs }: { onClose: () => void; txs: TransactionR
       fresh.push(p);
     }
     if (!opts.silent) {
-      window.alert(`已写入 ${fresh.length} 条到待确认池${r.rows.length - fresh.length > 0 ? `,去重跳过 ${r.rows.length - fresh.length} 条` : ''}`);
+      await alertDialog(`已写入 ${fresh.length} 条到待确认池${r.rows.length - fresh.length > 0 ? `,去重跳过 ${r.rows.length - fresh.length} 条` : ''}`);
       onClose();
     }
     return fresh;
@@ -318,7 +319,7 @@ function ImportWizard({ onClose, txs }: { onClose: () => void; txs: TransactionR
     const cats = await db.categories.toArray();
     const accounts = (await db.accounts.toArray()).filter((a) => !a.is_archived);
     const ok = await confirmAllSilent(fresh, cats, accounts);
-    window.alert(`已全部入账 ${ok} 条(去重跳过 ${fresh.length - ok} 条)`);
+    await alertDialog(`已全部入账 ${ok} 条(去重跳过 ${fresh.length - ok} 条)`);
     onClose();
   };
 

@@ -5,6 +5,7 @@ import {
   fieldEncryptionConfigured,
 } from './crypto/keyring';
 import { DeadLetterSection } from './deadletter';
+import { confirmDialog } from './ui/dialog';
 
 const LOCK_KEY = 'lo_lock';
 const STAT_KEY = 'lo_stat_optin';
@@ -145,7 +146,7 @@ function LockOverlay({ onUnlock }: { onUnlock: () => void }) {
   };
 
   const forgot = async () => {
-    if (!window.confirm('忘记 PIN 将清空本机数据并退出登录(云端数据不受影响,重新登录后全量拉回)。继续?')) return;
+    if (!(await confirmDialog({ message: '忘记 PIN 将清空本机数据并退出登录(云端数据不受影响,重新登录后全量拉回)。继续?', danger: true, confirmText: '清空并退出' }))) return;
     localStorage.clear();
     await db.delete();
     location.reload();

@@ -1,5 +1,6 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from './db/db';
+import { confirmDialog } from './ui/dialog';
 
 /**
  * 同步诊断(P1-20,Review 2C):死信列表 —— 被服务端拒绝的变更此前对用户完全不可见。
@@ -22,7 +23,7 @@ export function DeadLetterSection() {
   };
 
   const clearAll = async (): Promise<void> => {
-    if (!window.confirm(`清空 ${letters.length} 条死信记录?对应修改不会重试,如需排查请先导出。`)) return;
+    if (!(await confirmDialog({ message: `清空 ${letters.length} 条死信记录?对应修改不会重试,如需排查请先导出。`, danger: true, confirmText: '清空' }))) return;
     await db.deadletter.clear();
   };
 

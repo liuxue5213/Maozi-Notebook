@@ -4,6 +4,7 @@ import { db } from './db/db';
 import { createLedgerLocally } from './db/seed';
 import { saveLocal } from './sync/wiring';
 import { getUserId } from './sync/api';
+import { alertDialog, confirmDialog, promptDialog } from './ui/dialog';
 
 /**
  * 账本管理(M02 多账本,第 14 轮):列表 / 切换(新记账归入)/ 新建 / 重命名 / 删除。
@@ -24,14 +25,14 @@ export function LedgerPanel({ onBack }: { onBack: () => void }) {
   };
 
   const create = async (): Promise<void> => {
-    const name = window.prompt('新账本名称(如:出差账本)');
+    const name = await promptDialog({ title: '新账本名称', message: '如:出差账本', placeholder: '账本名称' });
     if (!name?.trim()) return;
     const id = await createLedgerLocally(name.trim());
     await switchTo(id);
   };
 
   const rename = async (l: LedgerRow): Promise<void> => {
-    const name = window.prompt('新的账本名称', l.name);
+    const name = await promptDialog({ title: '新的账本名称', defaultValue: l.name });
     if (!name?.trim() || name.trim() === l.name) return;
     const updated: LedgerRow = { ...l, name: name.trim(), client_version: l.client_version + 1, updated_at: Date.now() };
     await saveLocal('ledger', updated as unknown as Record<string, unknown>, 'upsert', l as unknown as Record<string, unknown>);
@@ -39,15 +40,15 @@ export function LedgerPanel({ onBack }: { onBack: () => void }) {
 
   const remove = async (l: LedgerRow): Promise<void> => {
     if (ledgers.length <= 1) {
-      window.alert('至少保留一个账本,不能删除。');
+      await alertDialog('至少保留一个账本,不能删除。');
       return;
     }
     const uid = getUserId() ?? 'local';
     if (l.owner_user_id !== 'local' && l.owner_user_id !== uid) {
-      window.alert('仅账本所有者可删除。');
+      await alertDialog('仅账本所有者可删除。');
       return;
     }
-    if (!window.confirm(`删除「${l.name}」?其流水/分类/账户将一并进入回收站(30 天后清除),不可撤销。`)) return;
+    if (!(await confirmDialog({ message: `删除「${l.name}」?其流水/分类/账户将一并进入回收站(30 天后清除),不可撤销。`, danger: true, confirmText: '删除' }))) return;
     const now = Date.now();
     // 级联软删(P1-3 修复,Review):账本 + 名下流水/分类/账户/预算/预算项/周期规则/待确认池,
     // 全部本地软删并**统一以 delete op 上行**—— 修复前 accounts/categories/budgets 用 upsert

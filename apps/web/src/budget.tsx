@@ -13,6 +13,7 @@ import { getActiveLedgerId } from './db/seed';
 import { saveLocal } from './sync/wiring';
 import { categoryFreq } from './state/freq';
 import { periodRange } from './utils/period';
+import { confirmDialog } from './ui/dialog';
 
 async function loadBudgetModel(): Promise<BudgetModel | null> {
   const ledgerId = await getActiveLedgerId();
@@ -225,7 +226,7 @@ function BudgetModal({
 
   const remove = async () => {
     if (!original) return;
-    if (!window.confirm('删除本月预算(含分类额度)?')) return;
+    if (!(await confirmDialog({ message: '删除本月预算(含分类额度)?', danger: true, confirmText: '删除' }))) return;
     const now = Date.now();
     const row: BudgetRow = { ...original, is_deleted: true, deleted_at: now, client_version: original.client_version + 1, updated_at: now };
     await saveLocal('budget', row as unknown as Record<string, unknown>, 'delete', (original ?? undefined) as unknown as Record<string, unknown> | undefined);

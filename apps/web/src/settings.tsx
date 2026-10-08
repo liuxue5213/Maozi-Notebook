@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { SUPPORTED_CURRENCIES, currencySymbol } from '@ledgerone/domain';
 import { authApi, clearTokens, getBaseCurrency } from './sync/api';
 import { db } from './db/db';
+import { confirmDialog } from './ui/dialog';
 
 /** 账号设置(M16/第 16 轮):昵称 + 主币种 + 注销账号(P0-6)。主币种应用于新建交易的记账币种;存量数据不回算。 */
 export function SettingsPage({ onBack, onDeleted }: { onBack: () => void; onDeleted: () => void }) {
@@ -80,11 +81,11 @@ export function SettingsPage({ onBack, onDeleted }: { onBack: () => void; onDele
             className="danger"
             disabled={busy || !delPassword}
             onClick={() => {
-              if (!window.confirm('确认注销账号?云端数据 30 天后删除,本机数据需另行清空。')) { setDelConfirm(false); return; }
-              setBusy(true);
-              setError(null);
-              authApi.deleteMe(delPassword)
-                .then(async () => {
+              void (async () => {
+                if (!(await confirmDialog({ message: '确认注销账号？云端数据 30 天后删除，本机数据将一并清空。', danger: true, confirmText: '注销' }))) { setDelConfirm(false); return; }
+                setBusy(true);
+                setError(null);
+                try {
                   // O6 有序停机:先吊销本地会话与字段加密密钥(阻断新的同步调度与可解密状态),
                   // 再由 Dexie 关闭连接并删除整库;只清会话/密钥类键——
                   // 服务器地址(lo_server)/主题/应用锁/模板等设备级偏好保留(替代原 localStorage.clear() 全清,RK-08)
@@ -92,9 +93,12 @@ export function SettingsPage({ onBack, onDeleted }: { onBack: () => void; onDele
                   localStorage.removeItem('lo_fenc');
                   await db.delete();
                   onDeleted();
-                })
-                .catch((e) => setError(e instanceof Error ? e.message : String(e)))
-                .finally(() => setBusy(false));
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : String(e));
+                } finally {
+                  setBusy(false);
+                }
+              })();
             }}
           >
             确认注销

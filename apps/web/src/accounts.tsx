@@ -9,6 +9,7 @@ import {
 import { db } from './db/db';
 import { getActiveLedgerId } from './db/seed';
 import { saveLocal } from './sync/wiring';
+import { alertDialog, confirmDialog } from './ui/dialog';
 
 const TYPE_ICONS: Record<AccountType, string> = {
   cash: '💵', debit_card: '💳', credit_card: '💳', wallet: '👛',
@@ -150,10 +151,10 @@ export function AccountsPage({ onBack }: { onBack: () => void }) {
 async function repay(creditAccount: AccountRow, amount: string, accounts: AccountRow[]): Promise<void> {
   const from = accounts.find((a) => !a.is_archived && a.id !== creditAccount.id && (a.type === 'cash' || a.type === 'debit_card'));
   if (!from) {
-    window.alert('没有可用的现金/储蓄卡账户作为还款来源');
+    await alertDialog('没有可用的现金/储蓄卡账户作为还款来源');
     return;
   }
-  if (!window.confirm(`从「${from.name}」向「${creditAccount.name}」还款 ${cur()}${formatAmount(amount)}?`)) return;
+  if (!(await confirmDialog({ message: `从「${from.name}」向「${creditAccount.name}」还款 ${cur()}${formatAmount(amount)}?`, confirmText: '还款' }))) return;
   const now = Date.now();
   const tx: TransactionRow = {
     id: newId(),

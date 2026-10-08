@@ -6,6 +6,7 @@ import {
   type CategoryRow, type TransactionRow, type TransactionType, type VoiceParseResult,
 } from '@ledgerone/domain';
 import { db } from './db/db';
+import { promptDialog } from './ui/dialog';
 import { getActiveLedgerId } from './db/seed';
 import { aiParse, getBaseCurrency } from './sync/api';
 import { saveLocal } from './sync/wiring';
@@ -211,9 +212,9 @@ export function QuickAdd({ onNeedAuth }: { onNeedAuth?: () => void }) {
 
   const cleanName = (s: string) => s.slice(0, 20);
 
-  const saveTemplate = () => {
+  const saveTemplate = async () => {
     if (!valid || !value) return;
-    const name = window.prompt('模板名称(如:每天咖啡)', catNameOf(selectedCat, categories) || '快捷模板');
+    const name = await promptDialog({ title: '模板名称(如:每天咖啡)', defaultValue: catNameOf(selectedCat, categories) || '快捷模板', placeholder: '模板名称' });
     if (!name) return;
     const tpl: QuickTemplate = {
       id: newId(),
@@ -345,7 +346,7 @@ export function QuickAdd({ onNeedAuth }: { onNeedAuth?: () => void }) {
       <button className="save-btn" disabled={!valid} onClick={() => void save()}>
         保存{value && valid ? ` ${cur()}${formatAmount(value)}` : ''}
       </button>
-      <button className="tpl-save link" disabled={!valid} onClick={saveTemplate}>存为模板</button>
+      <button className="tpl-save link" disabled={!valid} onClick={() => void saveTemplate()}>存为模板</button>
 
       {toast && <div className="toast">{toast}</div>}
       {voiceOpen && (

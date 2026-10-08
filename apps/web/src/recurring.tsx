@@ -9,6 +9,7 @@ import { db } from './db/db';
 import { getActiveLedgerId } from './db/seed';
 import { saveLocal } from './sync/wiring';
 import { runDueRecurring } from './recurring-engine';
+import { confirmDialog } from './ui/dialog';
 
 const FREQ_LABELS: Record<RecurringFrequency, string> = {
   daily: '每天',
@@ -96,7 +97,7 @@ export function RecurringPage({ onBack }: { onBack: () => void }) {
             <button
               className="danger slim"
               onClick={async () => {
-                if (!window.confirm('删除该周期规则?已生成的流水不受影响。')) return;
+                if (!(await confirmDialog({ message: '删除该周期规则?已生成的流水不受影响。', danger: true, confirmText: '删除' }))) return;
                 const upd: RecurringRuleRow = { ...r, is_deleted: true, deleted_at: Date.now(), client_version: r.client_version + 1, updated_at: Date.now() };
                 await saveLocal('recurring_rule', upd as unknown as Record<string, unknown>, 'delete');
               }}
