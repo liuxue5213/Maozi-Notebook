@@ -169,4 +169,17 @@ export async function prepareAfterLogin(): Promise<void> {
     await wipeLocal();
   }
   await engine.syncOnce();
+  // T-35 首登对齐(与移动端同口径):登录同步完成后,当前账本对齐到该账号「最早创建的已同步账本」。
+  // 否则 Web 本地播种的新账本(以及换设备后各自新建的账本)会把两端各锁在各自的账本里——
+  // 双端各自 push/pull 正常、徽章显示「同步完成」,内容却完全不同(数据不同步的典型根因)。
+  const candidates = await db.ledgers.filter((l) => l.server_version != null && !l.is_deleted).toArray();
+  const earliest = candidates.sort((a, b) => a.created_at - b.created_at)[0];
+  if (earliest) {
+    const activeId = ((await db.meta.get('active_ledger'))?.value as string) ?? '';
+    const activeRow = activeId ? await db.ledgers.get(activeId) : undefined;
+    if (earliest.id !== activeId && (!activeRow || Number(activeRow.created_at) > Number(earliest.created_at))) {
+      await db.meta.put({ key: 'active_ledger', value: earliest.id });
+      console.log('[auth] 账本对齐到最早服务器账本:', earliest.id);
+    }
+  }
 }
