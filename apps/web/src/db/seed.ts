@@ -61,10 +61,10 @@ export async function createLedgerLocally(name: string, icon = '📒'): Promise<
 export async function getActiveLedgerId(): Promise<string> {
   const v = (await db.meta.get('active_ledger'))?.value;
   if (typeof v === 'string' && v) {
-    // 指向有效性校验(与移动端同口径):账本被删(如清理空壳)后旧指针自动迁移,
-    // 否则会停在幽灵账本上看不到任何数据
+    // 指向有效性校验(与移动端同口径):仅当「确认存在且已软删」才迁移——
+    // 指向的账本本地暂不存在(刚登录、数据未同步到)时信任指针,避免误迁
     const row = await db.ledgers.get(v);
-    if (row && !row.is_deleted) return v;
+    if (!row || !row.is_deleted) return v;
   }
   // 兜底与 T-35 对齐口径一致:最早创建且未软删(原 orderBy('id') 会随机落到
   // 换号/重装期间播种的空壳账本,造成「两端各看各的账本」)
