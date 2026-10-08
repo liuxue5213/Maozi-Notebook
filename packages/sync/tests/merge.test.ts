@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isStaleLwwPush, mergeServerRow, mergeThreeWay } from '../src/merge';
+import { hasEffectiveChanges, isStaleLwwPush, mergeServerRow, mergeThreeWay } from '../src/merge';
 
 describe('字段级合并(PRD 5.5)', () => {
   const server = {
@@ -170,5 +170,19 @@ describe('isStaleLwwPush(无 base 迟到载荷拒收,预算恢复 bug ②)', () 
 
   it('缺失 updated_at 时保守不拒', () => {
     expect(isStaleLwwPush(server, { total_amount: '1' })).toBe(false);
+  });
+});
+
+describe('is_deleted 恢复判定(协议缺口修复)', () => {
+  it('软删行收到 is_deleted=true→false 的恢复载荷 → 判为有效变更(不得 noop)', () => {
+    const server = { note: '牛奶', is_deleted: true, updated_at: 2, client_version: 5 };
+    const revive = { note: '牛奶', is_deleted: false, deleted_at: null, updated_at: 3, client_version: 6 };
+    expect(hasEffectiveChanges(server, revive)).toBe(true);
+  });
+
+  it('已恢复行重放同一载荷 → 无有效变更(noop 幂等)', () => {
+    const server = { note: '牛奶', is_deleted: false, deleted_at: null, updated_at: 3, client_version: 6 };
+    const replay = { note: '牛奶', is_deleted: false, deleted_at: null, updated_at: 3, client_version: 6 };
+    expect(hasEffectiveChanges(server, replay)).toBe(false);
   });
 });

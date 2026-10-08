@@ -57,11 +57,15 @@ export function mergeServerRow<T extends Record<string, unknown>>(
   return { merged, conflicts };
 }
 
-/** 服务端 noop 判定:载荷与现有行是否完全等效(金额按数值等价,忽略同步元字段与未提供字段) */
+/** 服务端 noop 判定:载荷与现有行是否完全等效(金额按数值等价,忽略同步元字段与未提供字段)。
+ *  例外:is_deleted 视为有效变更——恢复(软删→未删)只改删除状态,若被跳过会被误判 noop,
+ *  导致「回收站恢复/误删撤销」永远无法同步到服务端(协议缺口,2026-10-09 修复)。 */
+const EFFECTIVE_META_SKIP = new Set([...META_FIELDS].filter((k) => k !== 'is_deleted'));
+
 export function hasEffectiveChanges(server: Record<string, unknown>, incoming: Record<string, unknown>): boolean {
   const keys = new Set(Object.keys(incoming));
   for (const k of keys) {
-    if (META_FIELDS.has(k)) continue;
+    if (EFFECTIVE_META_SKIP.has(k)) continue;
     const iv = incoming[k];
     if (iv === undefined) continue;
     if (!valuesEqual(server[k], iv)) return true;
