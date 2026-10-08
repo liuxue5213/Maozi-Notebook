@@ -61,6 +61,9 @@ export async function createLedgerLocally(name: string, icon = '📒'): Promise<
 export async function getActiveLedgerId(): Promise<string> {
   const v = (await db.meta.get('active_ledger'))?.value;
   if (typeof v === 'string' && v) return v;
-  const first = await db.ledgers.orderBy('id').first();
-  return first?.id ?? '';
+  // 兜底与 T-35 对齐口径一致:最早创建且未软删(原 orderBy('id') 会随机落到
+  // 换号/重装期间播种的空壳账本,造成「两端各看各的账本」)
+  const candidates = await db.ledgers.filter((l) => !l.is_deleted).toArray();
+  const earliest = candidates.sort((a, b) => a.created_at - b.created_at)[0];
+  return earliest?.id ?? '';
 }

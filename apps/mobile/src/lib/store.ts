@@ -126,7 +126,17 @@ async function ensureSeed(): Promise<void> {
 }
 
 export async function getActiveLedgerId(): Promise<string> {
-  return ((await metaGet(db, 'active_ledger')) as string) ?? '';
+  const active = ((await metaGet(db, 'active_ledger')) as string) ?? '';
+  if (active) {
+    const row = await db.getAllAsync<{ is_deleted: number }>('SELECT is_deleted FROM ledgers WHERE id = ?', [active]);
+    if (row[0] && !row[0].is_deleted) return active; // 指向有效账本
+  }
+  // 兜底与 T-35 对齐口径一致:最早创建且未软删(防止重装/清库后随机落到空壳账本)
+  const earliest = await db.getAllAsync<{ id: string }>(
+    'SELECT id FROM ledgers WHERE is_deleted = 0 ORDER BY created_at ASC, id ASC LIMIT 1');
+  const fallback = earliest[0]?.id ?? '';
+  if (fallback && fallback !== active) await metaSet(db, 'active_ledger', fallback);
+  return fallback;
 }
 
 export async function saveTx(row: AnyRow, base?: AnyRow | null): Promise<void> {
