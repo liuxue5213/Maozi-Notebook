@@ -175,17 +175,16 @@ export class AuthService {
         .limit(1)
     )[0];
     if (!row) {
+      // 2026-10-09 按用户要求移除「重放→吊销该用户全部会话」的连坐:
+      // 多设备并发刷新/诊断期多次登录会把所有端挤下线,自部署家庭场景得不偿失。
+      // 保留:重放令牌本身拒绝 + 审计留痕(全端应急下线仍可用退出登录/注销实现)
       const replayed = (await db.select({ id: s.refresh_tokens.id, user_id: s.refresh_tokens.user_id }).from(s.refresh_tokens).where(eq(s.refresh_tokens.token_hash, hash)).limit(1))[0];
       if (replayed) {
-        await db
-          .update(s.refresh_tokens)
-          .set({ revoked_at: Date.now() })
-          .where(and(eq(s.refresh_tokens.user_id, replayed.user_id), isNull(s.refresh_tokens.revoked_at)));
-        logAudit({ actorUserId: replayed.user_id, action: 'auth.refresh.reuse_detected', summary: { familyRevoked: true } });
+        logAudit({ actorUserId: replayed.user_id, action: 'auth.refresh.reuse_detected', summary: { familyRevoked: false } });
       } else {
         logAudit({ action: 'auth.refresh.failed', target: 'invalid_or_expired_token' });
       }
-      throw new AppError('auth.refresh.401', 401, '刷新令牌无效或已过期');
+      throw new AppError('auth.refresh.401', 401, '刷新令牌无效或已过期,请重新登录');
     }
     // 轮换语义:条件更新吊销(P1-13:rowCount=0 即并发已轮换 → 按重放处理连坐),一次性换新
     const rotated = await db
@@ -193,11 +192,8 @@ export class AuthService {
       .set({ revoked_at: Date.now() })
       .where(and(eq(s.refresh_tokens.id, row.id), isNull(s.refresh_tokens.revoked_at)));
     if (!affected(rotated)) {
-      await db
-        .update(s.refresh_tokens)
-        .set({ revoked_at: Date.now() })
-        .where(and(eq(s.refresh_tokens.user_id, row.user_id), isNull(s.refresh_tokens.revoked_at)));
-      logAudit({ actorUserId: row.user_id, action: 'auth.refresh.reuse_detected', summary: { familyRevoked: true, race: true } });
+      // 2026-10-09 移除并发轮换的连坐吊销(同上):并发失败方仅本次 401,不牵连其他端
+      logAudit({ actorUserId: row.user_id, action: 'auth.refresh.race_rejected', summary: { familyRevoked: false } });
       throw new AppError('auth.refresh.401', 401, '刷新令牌无效或已过期');
     }
     logAudit({ actorUserId: row.user_id, action: 'auth.refresh.rotated' });
