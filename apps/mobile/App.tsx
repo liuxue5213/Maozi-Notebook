@@ -1789,7 +1789,14 @@ function CsvExportSection({ monthOffset }: { monthOffset: number }) {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<string | null>(null);
 
+  // 审查修复(P2):Android Share 走 Intent EXTRA_TEXT,超 binder ~1MB 限制会抛
+  // TransactionTooLargeException 崩应用 —— 超阈值拦截并提示分月导出
+  const SHARE_MAX_CHARS = 500_000;
   const share = (name: string, csv: string) => {
+    if (csv.length > SHARE_MAX_CHARS) {
+      setDone(`⚠️ ${name} 数据量过大(${(csv.length / 1024 / 1024).toFixed(1)}MB),系统分享通道放不下——请切换「本月」分月导出`);
+      return;
+    }
     void import('react-native').then((rn) => void rn.Share.share({ message: csv, title: name }));
     setDone(name);
   };
@@ -2204,6 +2211,7 @@ function SafetyScreen({ onBack, onOpenDead }: { onBack: () => void; onOpenDead: 
   }, []);
 
   const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(null), 3000); };
+  const msgIsErr = msg ? /错误|过多|失败/.test(msg) : false;
 
   return (
     <ScrollView contentContainerStyle={styles.form}>
@@ -2310,7 +2318,7 @@ function SafetyScreen({ onBack, onOpenDead }: { onBack: () => void; onOpenDead: 
         <Text style={{ fontSize: 13, color: '#1a1c23' }}>🩺 同步诊断(死信)</Text>
         <Text style={{ fontSize: 12, color: '#8a93a5' }}>导出 · 清空 ›</Text>
       </Pressable>
-      {msg && <Text style={{ fontSize: 12, color: '#1f9d6c' }}>{msg}</Text>}
+      {msg && <Text style={{ fontSize: 12, color: msgIsErr ? '#d64545' : '#1f9d6c' }}>{msg}</Text>}
     </ScrollView>
   );
 }
@@ -2410,7 +2418,6 @@ function MeScreen({ logged, onLogged, syncText, lastSyncAt, onSync, onOpen }: { 
     <ScrollView contentContainerStyle={styles.form}>
       <Text style={styles.meTitle}>{logged ? `${me?.nickname || me?.email || '已登录'} · 云同步开启` : '未登录 · 纯本地模式'}</Text>
       <Text style={styles.muted}>离线也能记账:数据先存本机,连上服务器后自动同步</Text>
-      <Text style={styles.muted}>同步状态:{syncText}</Text>
       {/* 菜单与 Web「我的」页同构(顺序/命名/副标题一致) */}
       {([
         ['待确认池 📥', '导入账单 · 去重确认', 'import'],

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 /**
  * O3 统一弹窗:替代 window.confirm/alert/prompt。
@@ -62,11 +62,17 @@ export function promptDialog(opts: PromptOptions): Promise<string | null> {
 
 export function DialogHost() {
   const [, setTick] = useState(0);
+  const maskRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const fn = () => setTick((t) => t + 1);
     listeners.add(fn);
     return () => { listeners.delete(fn); };
   }, []);
+  // 审查修复(P2):focus 只在弹窗打开时执行一次——内联 ref 回调会在父组件(同步状态)每次
+  // 重渲染时重新执行并抢走 prompt 输入框焦点
+  useEffect(() => {
+    if (active) maskRef.current?.focus();
+  }, [active !== null]);
 
   if (!active) return null;
   const { kind, opts, resolve } = active;
@@ -92,7 +98,7 @@ export function DialogHost() {
         if (e.key === 'Enter' && kind !== 'prompt') { if (kind === 'confirm') done(true); else done(null); }
       }}
       tabIndex={-1}
-      ref={(el) => el?.focus()}
+      ref={maskRef}
     >
       <div className="modal" style={{ minWidth: 300, maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
         {titleText && <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 8 }}>{titleText}</div>}
