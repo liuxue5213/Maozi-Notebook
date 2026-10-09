@@ -2401,6 +2401,8 @@ function MeScreen({ logged, onLogged, syncText, lastSyncAt, onSync, onOpen }: { 
               await db.runAsync(`DELETE FROM ${t} WHERE ledger_id = ?`, [l.id]);
             }
             await db.runAsync('DELETE FROM ledgers WHERE id = ?', [l.id]);
+            // 关键:连同其 outbox 残留操作一并清除,否则种子操作仍会上行再造幽灵(审查修复)
+            await db.runAsync('DELETE FROM outbox WHERE payload LIKE ?', [`%${l.id}%`]);
           }
           await metaSet(db, 'active_ledger', null);
           resetInitCache();

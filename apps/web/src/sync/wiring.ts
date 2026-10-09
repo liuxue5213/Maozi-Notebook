@@ -206,7 +206,7 @@ export async function prepareAfterLogin(): Promise<void> {
     for (const l of unsynced) {
       const hasTx = await db.transactions.where('ledger_id').equals(l.id).count();
       if (hasTx > 0) continue; // 有流水的离线账本是真实数据,保留
-      await db.transaction('rw', [db.ledgers, db.transactions, db.categories, db.accounts, db.budgets, db.budget_items, db.recurring_rules, db.savings_plans], async () => {
+      await db.transaction('rw', [db.ledgers, db.transactions, db.categories, db.accounts, db.budgets, db.budget_items, db.recurring_rules, db.savings_plans, db.outbox], async () => {
         await db.transactions.where('ledger_id').equals(l.id).delete();
         await db.categories.where('ledger_id').equals(l.id).delete();
         await db.accounts.where('ledger_id').equals(l.id).delete();
@@ -215,6 +215,8 @@ export async function prepareAfterLogin(): Promise<void> {
         await db.recurring_rules.where('ledger_id').equals(l.id).delete();
         await db.savings_plans.where('ledger_id').equals(l.id).delete();
         await db.ledgers.delete(l.id);
+        // 关键:连同其 outbox 残留操作一并清除,否则种子操作仍会上行再造幽灵(审查修复)
+        await db.outbox.filter((o) => o.payload && (o.payload as Record<string, unknown>).ledger_id === l.id).delete();
       });
     }
     await db.meta.put({ key: 'active_ledger', value: '' }); // 触发兜底重选最早有效账本
