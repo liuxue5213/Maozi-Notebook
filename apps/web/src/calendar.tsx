@@ -36,7 +36,7 @@ export function CalendarView() {
     const rows = (await db.transactions.where('happened_at').between(start, end, true, false).toArray())
       .filter((r) => !r.is_deleted && r.type !== 'transfer' && r.ledger_id === ledgerId);
     const cats = (await db.categories.where('ledger_id').equals(ledgerId).toArray());
-    const accounts = await db.accounts.toArray();
+    const accounts = await db.accounts.where('ledger_id').equals(ledgerId).toArray();
     const catMap = new Map(cats.map((c) => [c.id, c]));
     const accMap = new Map(accounts.map((a) => [a.id, a]));
     const byDay = new Map<number, { expense: string; income: string }>();

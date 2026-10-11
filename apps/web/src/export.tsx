@@ -156,8 +156,9 @@ export function ExportPage({ onBack }: { onBack: () => void }) {
     const { start, end } = resolveRange(); // end 为排他上界(下月 1 日 00:00 / 当前时刻)
     const files: string[] = [];
     if (includeTx) {
-      const cats = await db.categories.toArray();
-      const accounts = await db.accounts.toArray();
+      const ledgerId = await getActiveLedgerId();
+      const cats = await db.categories.where('ledger_id').equals(ledgerId).toArray();
+      const accounts = await db.accounts.where('ledger_id').equals(ledgerId).toArray();
       const catMap = new Map(cats.map((c) => [c.id, c]));
       const accMap = new Map(accounts.map((a) => [a.id, a]));
       const rows = (await db.transactions.toArray())
@@ -183,7 +184,8 @@ export function ExportPage({ onBack }: { onBack: () => void }) {
       files.push(`${name}(${rows.length} 笔流水)`);
     }
     if (includeAccounts) {
-      const accounts = await db.accounts.toArray();
+      const ledgerId2 = await getActiveLedgerId();
+      const accounts = await db.accounts.where('ledger_id').equals(ledgerId2).toArray();
       const csv = buildCsv(
         ['名称', '类型', '初始余额', '当前余额', '币种', '计入净值', '已归档'],
         accounts.map((a) => [
@@ -201,7 +203,8 @@ export function ExportPage({ onBack }: { onBack: () => void }) {
       files.push(`${name}(${accounts.length} 个账户)`);
     }
     if (includeCats) {
-      const cats = await db.categories.toArray();
+      const ledgerId2 = await getActiveLedgerId();
+      const cats = await db.categories.where('ledger_id').equals(ledgerId2).toArray();
       const csv = buildCsv(
         ['名称', '层级', '收支', '图标'],
         cats.map((c) => [

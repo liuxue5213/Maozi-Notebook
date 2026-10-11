@@ -156,8 +156,9 @@ export function TransactionList() {
   useEffect(() => setLoaded(TX_PAGE_SIZE), [filter]); // 筛选变化回首批
 
   const activeData = useLiveQuery(async () => {
-    const cats = await db.categories.toArray();
-    const accounts = await db.accounts.toArray();
+    const ledgerId = await getActiveLedgerId();
+    const cats = await db.categories.where('ledger_id').equals(ledgerId).toArray();
+    const accounts = await db.accounts.where('ledger_id').equals(ledgerId).toArray();
     const catMap = new Map(cats.map((c) => [c.id, c]));
     const accMap = new Map(accounts.map((a) => [a.id, a]));
     // P0-3/P0-4:双下推(账本+日期走复合索引)+ 全量过滤 + 按 limit 增量加载(「加载更多」递增)

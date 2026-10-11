@@ -533,7 +533,8 @@ function TextImportModal({ onClose }: { onClose: () => void }) {
   /** 全部入账(第 33 轮):解析 → 写入待确认池 → 立即全部确认 */
   const writeAndConfirmAll = async (): Promise<void> => {
     const fresh2 = await writePending({ silent: true });
-    const cats = await db.categories.toArray();
+    const ledgerId = await getActiveLedgerId();
+    const cats = await db.categories.where('ledger_id').equals(ledgerId).toArray();
     const accounts = (await db.accounts.toArray()).filter((a) => !a.is_archived);
     const ok = await confirmAllSilent(fresh2, cats, accounts);
     setDone(`已全部入账 ${ok} 条`);

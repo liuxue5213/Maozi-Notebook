@@ -1,5 +1,6 @@
 import { isDue, nextOccurrence, type RecurringRuleRow, type TransactionRow } from '@ledgerone/domain';
 import { db } from './db/db';
+import { getActiveLedgerId } from './db/seed';
 import { enqueue } from './sync/wiring';
 import { getBaseCurrency } from './sync/api';
 
@@ -11,8 +12,9 @@ import { getBaseCurrency } from './sync/api';
  */
 export async function runDueRecurring(now = Date.now()): Promise<number> {
   const rules = (await db.recurring_rules.toArray()).filter((r) => !r.is_deleted);
-  const cats = await db.categories.toArray();
-  const accounts = await db.accounts.toArray();
+  const ledgerId = await getActiveLedgerId();
+  const cats = await db.categories.where('ledger_id').equals(ledgerId).toArray();
+  const accounts = await db.accounts.where('ledger_id').equals(ledgerId).toArray();
   let generated = 0;
   for (let i = 0; i < rules.length; i++) {
     let cur: RecurringRuleRow = rules[i];
