@@ -11,6 +11,7 @@ import { Reports } from './reports';
 import { BudgetCard } from './budget';
 import { AuthModal, MeTab } from './auth';
 import { WriteErrorToast } from './WriteErrorToast';
+import { startDesktopNotifyLoop } from './notify';
 import { DialogHost } from './ui/dialog';
 
 type Tab = 'record' | 'list' | 'report' | 'me';
@@ -81,6 +82,11 @@ export function App() {
   const [authEpoch, setAuthEpoch] = useState(0); // 登录/登出后触发重渲染
   const sync = useSyncStatus();
   const [online, setOnline] = useState(() => (typeof navigator === 'undefined' ? true : navigator.onLine));
+
+  // N2 轻量版:已授权桌面通知时启动预算超支/还款到期检查循环
+  useEffect(() => {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') startDesktopNotifyLoop();
+  }, []);
 
   // navigator.onLine 非响应式:监听 online/offline 事件驱动重渲染
   useEffect(() => {

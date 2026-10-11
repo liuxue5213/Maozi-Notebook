@@ -145,6 +145,7 @@ export async function aiInsights(body: {
   recentTxs: Array<{ note: string; amount: string; date: string }>;
   question?: string;
 }): Promise<{ text: string }> {
+  if (!isAiEnabled()) throw new Error('已在「安全与隐私」中关闭 AI 分析,如需使用请重新开启');
   try {
     return await apiFetch('/v1/ai/insights', { method: 'POST', body: JSON.stringify(body) }) as unknown as { text: string };
   } catch (e) {
@@ -156,6 +157,7 @@ export async function aiInsights(body: {
 export async function aiParse(text: string, categories: string[]): Promise<{
   amount: number; type: 'expense' | 'income'; category: string | null; note: string; day: number | null;
 }> {
+  if (!isAiEnabled()) throw new Error('已在「安全与隐私」中关闭 AI 分析,如需使用请重新开启');
   try {
     return await apiFetch('/v1/ai/parse', { method: 'POST', body: JSON.stringify({ text, categories }) }) as unknown as {
       amount: number; type: 'expense' | 'income'; category: string | null; note: string; day: number | null;
@@ -163,6 +165,16 @@ export async function aiParse(text: string, categories: string[]): Promise<{
   } catch (e) {
     throw aiErrorMessage(e, '文字记账');
   }
+}
+
+/** Q5 AI 授权开关(默认开):关闭后所有 AI 功能在端上拒绝发起,不出域任何数据 */
+const AI_OPTIN_KEY = 'lo_ai_optin';
+export function isAiEnabled(): boolean {
+  return localStorage.getItem(AI_OPTIN_KEY) !== '0';
+}
+export function setAiEnabled(on: boolean): void {
+  if (on) localStorage.removeItem(AI_OPTIN_KEY);
+  else localStorage.setItem(AI_OPTIN_KEY, '0');
 }
 
 /** AI 对话式查询(N5「问一问」):端上拼好本期数据上下文+用户问题,走 /v1/ai/chat(用户级配额/审计复用) */

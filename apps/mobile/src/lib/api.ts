@@ -160,6 +160,16 @@ export const aiInsights = (body: Record<string, unknown>) =>
 export const aiChat = (content: string) =>
   apiFetch('/v1/ai/chat', { method: 'POST', body: JSON.stringify({ content: content.slice(0, 2000) }) }) as unknown as Promise<{ text: string }>;
 
+/** Q5 AI 授权开关(默认开,SecureStore 持久化):关闭后 AI 功能端上拒绝发起,零数据出域 */
+const AI_OPTIN_KEY = 'priv_ai';
+export async function aiEnabledFlag(): Promise<boolean> {
+  return (await SecureStore.getItemAsync(AI_OPTIN_KEY)) !== '0';
+}
+export async function setAiEnabled(on: boolean): Promise<void> {
+  if (on) await SecureStore.deleteItemAsync(AI_OPTIN_KEY);
+  else await SecureStore.setItemAsync(AI_OPTIN_KEY, '0');
+}
+
 export const authApi = {
   login: (email: string, password: string) => auth.login(email, password),
   register: (email: string, password: string) => auth.register(email, password),

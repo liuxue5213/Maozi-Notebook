@@ -15,7 +15,7 @@ import { initDb, resetInitCache, createLedgerWithSeed, listRecent, saveTx, topCa
 import { clearSession as clearSessionLocal } from './src/lib/api';
 import { resetLocalDatabase } from './src/lib/db';
 import { prepareAfterLogin, saveLocal } from '@ledgerone/sqlite-sync';
-import { authApi, aiChat, aiInsights, aiParse, clearSession, getServerUrl, insecureTransportReason, isLoggedIn, logout as logoutAll, saveSession, setServerUrl, SERVER_PRESETS, resolveServerUrl, validateServerUrl } from './src/lib/api';
+import { authApi, aiChat, aiInsights, aiParse, aiEnabledFlag, clearSession, getServerUrl, insecureTransportReason, isLoggedIn, logout as logoutAll, saveSession, setServerUrl, SERVER_PRESETS, resolveServerUrl, setAiEnabled, validateServerUrl } from './src/lib/api';
 
 type Tab = 'record' | 'list' | 'report' | 'me';
 
@@ -1499,6 +1499,7 @@ function ReportScreen({ onDrill }: { onDrill: (catId: string) => void }) {
                 setAiBusy(true); setAiText('');
                 void (async () => {
                   try {
+                    if (!(await aiEnabledFlag())) { setAiText('已在「安全与隐私」中关闭 AI 分析'); return; }
                     const r = await aiInsights({
                       month: monthOffset === 0 ? '本月' : mr.label,
                       income: String(sum.income), expense: String(sum.expense),
@@ -1526,6 +1527,7 @@ function ReportScreen({ onDrill }: { onDrill: (catId: string) => void }) {
                 void (async () => {
                   const q = askText.trim();
                   if (!q || askBusy) return;
+                  if (!(await aiEnabledFlag())) { setAskAnswer('已在「安全与隐私」中关闭 AI 分析'); return; }
                   setAskBusy(true); setAskAnswer('');
                   try {
                     const top = byCat.slice(0, 10).map((c) => `${c.name} ${c.total}元`).join('、');
@@ -1543,6 +1545,7 @@ function ReportScreen({ onDrill }: { onDrill: (catId: string) => void }) {
                 void (async () => {
                   const q = askText.trim();
                   if (!q || askBusy) return;
+                  if (!(await aiEnabledFlag())) { setAskAnswer('已在「安全与隐私」中关闭 AI 分析'); return; }
                   setAskBusy(true); setAskAnswer('');
                   try {
                     const top = byCat.slice(0, 10).map((c) => `${c.name} ${c.total}元`).join('、');
@@ -2197,6 +2200,7 @@ function SafetyScreen({ onBack, onOpenDead }: { onBack: () => void; onOpenDead: 
   const [pinSetup, setPinSetup] = useState(false);
   const [privStat, setPrivStat] = useState(false);
   const [privCrash, setPrivCrash] = useState(false);
+  const [aiOn, setAiOn] = useState(true);
 
   useEffect(() => {
     void (async () => {
@@ -2207,6 +2211,7 @@ function SafetyScreen({ onBack, onOpenDead }: { onBack: () => void; onOpenDead: 
       setLockMode(await activeLockMode());
       setPrivStat((await SecureStore.getItemAsync('priv_stat')) === '1');
       setPrivCrash((await SecureStore.getItemAsync('priv_crash')) === '1');
+      setAiOn(await aiEnabledFlag());
     })();
   }, []);
 
@@ -2304,6 +2309,10 @@ function SafetyScreen({ onBack, onOpenDead }: { onBack: () => void; onOpenDead: 
         </View>
       )}
       <Text style={{ fontSize: 13, fontWeight: '700', color: '#1a1c23', marginTop: 8 }}>隐私开关</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fff', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 14 }}>
+        <Text style={{ fontSize: 13, color: '#1a1c23', flex: 1 }}>允许 AI 分析我的数据(统计摘要+备注前8字出域;关闭即零出域)</Text>
+        <Switch value={aiOn} onValueChange={(v) => { setAiOn(v); void setAiEnabled(v); }} />
+      </View>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fff', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 14 }}>
         <Text style={{ fontSize: 13, color: '#1a1c23' }}>行为统计</Text>
         <Switch value={privStat} onValueChange={(v) => { setPrivStat(v); void SecureStore.setItemAsync('priv_stat', v ? '1' : '0'); }} />

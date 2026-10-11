@@ -4,12 +4,16 @@ import {
   enableFieldEncryption, disableFieldEncryption, unlockFieldEncryption, lockFieldEncryption,
   fieldEncryptionConfigured,
 } from './crypto/keyring';
+import { setAiEnabled } from './sync/api';
+import { enableDesktopNotify } from './notify';
+import { alertDialog } from './ui/dialog';
 import { DeadLetterSection } from './deadletter';
 import { confirmDialog } from './ui/dialog';
 
 const LOCK_KEY = 'lo_lock';
 const STAT_KEY = 'lo_stat_optin';
 const CRASH_KEY = 'lo_crash_optin';
+const AI_OPTIN_KEY = 'lo_ai_optin';
 
 /** PBKDF2 参数(上线全检 F-04:替换单轮无盐 SHA-256) */
 const PBKDF2_ITERATIONS = 150_000;
@@ -246,6 +250,7 @@ export function SecurityPanel({ onBack }: { onBack: () => void }) {
   const [mode, setMode] = useState<'none' | 'setup' | 'verify-off'>('none');
   const [stat, setStat] = useState(() => localStorage.getItem(STAT_KEY) === '1');
   const [crash, setCrash] = useState(() => localStorage.getItem(CRASH_KEY) === '1');
+  const [aiOn, setAiOn] = useState(() => localStorage.getItem(AI_OPTIN_KEY) !== '0');
   const [fenc, setFenc] = useState(() => fieldEncryptionConfigured());
 
   return (
@@ -324,6 +329,24 @@ export function SecurityPanel({ onBack }: { onBack: () => void }) {
             <span className="muted small" style={{ display: 'block' }}>未接入采集 SDK;接入后默认开启,不上报流水内容</span>
           </span>
         </label>
+        <label className="me-row check-row">
+          <input
+            type="checkbox"
+            checked={aiOn}
+            onChange={(e) => {
+              setAiOn(e.target.checked);
+              setAiEnabled(e.target.checked);
+            }}
+          />
+          <span>
+            允许 AI 分析我的记账数据
+            <span className="muted small" style={{ display: 'block' }}>开启后「AI 分析/文字记账/问一问」会将统计摘要与备注(截断 8 字)发送至大模型;关闭即零出域,功能入口显示降级提示(Q5 拍板:默认开、可关)</span>
+          </span>
+        </label>
+        <div className="me-row">
+          <span className="muted small">桌面提醒(N2 轻量版):预算超支、信用卡还款 3 天内到期时发系统通知(同日去重)</span>
+          <button className="mini" onClick={() => { void enableDesktopNotify().then((msg) => void alertDialog(msg)); }}>开启提醒</button>
+        </div>
         <div className="me-row static-row">
           <div className="muted small">权限最小化:Web 端仅使用浏览器存储,不申请相机/麦克风/通讯录/位置权限</div>
         </div>
