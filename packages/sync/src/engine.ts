@@ -32,6 +32,8 @@ export interface SyncEngineDeps {
   onPushConflict?: (op: ChangeOp, conflicts: PushChangeResult['conflicts']) => Promise<void>;
   /** 服务端 rejected 的 op(数据非法等):调用方应移入死信隔离,不再重试 */
   onDeadLetter?: (op: ChangeOp, reason?: string) => Promise<void>;
+  /** 每轮同步成功结束后调用(对账自检挂载点,2026-10-09) */
+  afterSync?: () => Promise<void>;
   batchSize?: number;
   pullBatchSize?: number;
 }
@@ -81,6 +83,7 @@ export class SyncEngine {
         await this.pullAll();
       }
       this.emit({ state: 'idle', lastSyncAt: Date.now() });
+      if (this.deps.afterSync) await this.deps.afterSync();
     } catch (e) {
       this.emit({ state: 'error', lastError: e instanceof Error ? e.message : String(e) });
     } finally {

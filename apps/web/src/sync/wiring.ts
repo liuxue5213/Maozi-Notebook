@@ -3,7 +3,7 @@ import { SyncEngine } from '@ledgerone/sync';
 import { db, TABLE_BY_ENTITY } from '../db/db';
 import { createDebouncer } from '@ledgerone/sync-client';
 import type { SyncEngineDeps } from '@ledgerone/sync';
-import { getAccessToken, getUserId, makeTransport } from './api';
+import { getAccessToken, getUserId, isLoggedIn, apiFetch, makeTransport } from './api';
 
 const DEVICE_KEY = 'lo_device';
 
@@ -91,6 +91,38 @@ async function applyServerRow(entity: EntityKind, row: Record<string, unknown>):
   return true;
 }
 
+// ===== 对账自检(2026-10-09,Q3 拍板前置):同步完成后本地 vs 服务端逐实体计数比对 =====
+export interface SyncAudit { ok: boolean; diffs: Array<{ entity: string; local: number; server: number }>; at: number }
+let lastAudit: SyncAudit | null = null;
+const auditListeners = new Set<() => void>();
+
+export function getLastSyncAudit(): SyncAudit | null {
+  return lastAudit;
+}
+
+export function subscribeSyncAudit(fn: () => void): () => void {
+  auditListeners.add(fn);
+  return () => { auditListeners.delete(fn); };
+}
+
+/** outbox 为空(全部定案)时才对账:有未推送内容时本地暂时偏多是正常态 */
+async function auditCounts(): Promise<void> {
+  try {
+    if (!isLoggedIn() || (await db.outbox.count()) > 0) return;
+    const stats = (await apiFetch('/v1/sync/stats')) as Record<string, number>;
+    const diffs: SyncAudit['diffs'] = [];
+    for (const [entity, table] of Object.entries(TABLE_BY_ENTITY)) {
+      if (!table) continue;
+      const local = await table.filter((r: Record<string, unknown>) => !r.is_deleted).count();
+      const server = Number(stats[entity] ?? 0);
+      if (local !== server) diffs.push({ entity, local, server });
+    }
+    lastAudit = { ok: diffs.length === 0, diffs, at: Date.now() };
+    if (!lastAudit.ok) console.warn('[sync] 对账不一致:', diffs);
+    auditListeners.forEach((fn) => fn());
+  } catch { /* 对账失败静默:网络/权限问题不应干扰同步主流程 */ }
+}
+
 export const engine = new SyncEngine({
   transport: makeTransport() as SyncEngineDeps['transport'],
   queue: {
@@ -100,6 +132,7 @@ export const engine = new SyncEngine({
     },
     count: async () => db.outbox.count(),
   },
+  afterSync: auditCounts,
   sink: {
     applyServerRow,
     getCursor: async () => ((await db.meta.get('sync_cursor'))?.value as number) ?? 0,

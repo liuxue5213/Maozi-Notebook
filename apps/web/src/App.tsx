@@ -13,6 +13,7 @@ import { AuthModal, MeTab } from './auth';
 import { WriteErrorToast } from './WriteErrorToast';
 import { startDesktopNotifyLoop } from './notify';
 import { DialogHost } from './ui/dialog';
+import { SyncAuditBanner } from './SyncAuditBanner';
 
 type Tab = 'record' | 'list' | 'report' | 'me';
 
@@ -148,6 +149,7 @@ export function App() {
         />
       )}
       <WriteErrorToast />
+      <SyncAuditBanner />
       <DialogHost />
     </div>
   );

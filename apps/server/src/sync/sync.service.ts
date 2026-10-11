@@ -223,6 +223,34 @@ export class SyncService {
    * - 空页时保持游标不变(不跳到 head):并发提交晚于本页读取的行,客户端下次 pull
    *   会在同一区间重新扫描,绝不漏发。
    */
+  /** 对账自检(2026-10-09):按 pull 同口径返回各实体存活行数,客户端同步完成后比对本地计数,
+   *  不一致即界面亮红——终结「静默分歧」。 */
+  async stats(userId: string): Promise<Record<string, number>> {
+    const myLedgerIds = (
+      await db
+        .select({ ledger_id: s.ledger_members.ledger_id })
+        .from(s.ledger_members)
+        .where(and(eq(s.ledger_members.user_id, userId), eq(s.ledger_members.is_deleted, false)))
+    )
+      .filter((r: any) => !r.is_deleted)
+      .map((r: any) => r.ledger_id);
+    if (!myLedgerIds.length) return {};
+    const ledgers = sql.join(myLedgerIds.map((id: string) => sql`${id}`), sql`, `);
+    const parts: SQL[] = PULL_CONFIG.map((cfg) => {
+      const scope =
+        cfg.kind === 'ledger'
+          ? sql`l.id in (${ledgers})`
+          : cfg.kind === 'ledger_member'
+            ? sql`l.user_id = ${userId}`
+            : sql`l.ledger_id in (${ledgers})`;
+      return sql`select ${cfg.kind} as entity, count(*) as n from ${cfg.table} l where l.is_deleted = 0 and ${scope}`;
+    });
+    const [counts] = (await db.execute(sql`${sql.join(parts, sql` union all `)}`)) as unknown as [Array<{ entity: string; n: number | string }>, unknown];
+    const out: Record<string, number> = {};
+    for (const r of counts) out[r.entity] = Number(r.n);
+    return out;
+  }
+
   async pull(userId: string, cursor: number, limit = 500): Promise<PullResponse> {
     await bootstrapIfNeeded(userId);
     return db.transaction(

@@ -18,6 +18,12 @@ export class SyncController {
     return this.sync.push(req.userId, body.changes);
   }
 
+  /** 对账自检:各实体存活行数(客户端同步完成后比对本地计数) */
+  @Get('v1/sync/stats')
+  stats(@Req() req: AuthedRequest) {
+    return this.sync.stats(req.userId);
+  }
+
   @Get('v1/sync/pull')
   pull(
     @Req() req: AuthedRequest,
