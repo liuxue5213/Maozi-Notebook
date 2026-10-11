@@ -30,7 +30,12 @@ export function SavingsPage({ onBack }: { onBack: () => void }) {
       .filter((p) => !p.is_deleted)
       .sort((a, b) => b.created_at - a.created_at);
     const now = Date.now();
-    const txs = await db.transactions.toArray();
+    // O5:各计划期间取并集下界/上界,[ledger_id+happened_at] 区间下推
+    const minStart = plans.length ? Math.min(...plans.map((p) => p.period_start)) : 0;
+    const maxEnd = plans.length ? Math.max(...plans.map((p) => p.period_end)) : 0;
+    const txs = plans.length
+      ? await db.transactions.where('[ledger_id+happened_at]').between([ledgerId, minStart], [ledgerId, maxEnd]).toArray()
+      : [];
     const out = plans.map((p) => {
       const end = Math.min(p.period_end, now);
       const saved = Number(netSavings(txs.filter((t) => !t.is_deleted && t.ledger_id === p.ledger_id

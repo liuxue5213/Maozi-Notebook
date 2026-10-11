@@ -31,12 +31,16 @@ export function RecurringPage({ onBack }: { onBack: () => void }) {
 
   const model = useLiveQuery(async () => {
     const ledgerId = await getActiveLedgerId();
-    const rules = (await db.recurring_rules.toArray())
-      .filter((r) => !r.is_deleted && r.ledger_id === ledgerId)
+    // O5:全部走 ledger_id 索引下推;生成计数用 count() 不物化行
+    const rules = (await db.recurring_rules.where('ledger_id').equals(ledgerId).toArray())
+      .filter((r) => !r.is_deleted)
       .sort((a, b) => a.next_run_at - b.next_run_at);
     const cats = (await db.categories.where('ledger_id').equals(ledgerId).toArray());
-    const accounts = (await db.accounts.toArray()).filter((a) => !a.is_archived);
-    const generated = (await db.transactions.toArray()).filter((t) => t.source === 'recurring' && !t.is_deleted).length;
+    const accounts = (await db.accounts.where('ledger_id').equals(ledgerId).toArray()).filter((a) => !a.is_archived);
+    const generated = await db.transactions
+      .where('ledger_id').equals(ledgerId)
+      .filter((t) => t.source === 'recurring' && !t.is_deleted)
+      .count();
     return { rules, cats, accounts, generated };
   }, []);
 

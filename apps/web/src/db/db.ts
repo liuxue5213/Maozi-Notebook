@@ -72,6 +72,10 @@ export class LedgerDB extends Dexie {
     this.version(4).stores({
       savings_plans: 'id, ledger_id, server_version',
     });
+    // v5(O5 性能治理):is_deleted/deleted_at 索引 —— 回收站不再全表扫
+    this.version(5).stores({
+      transactions: 'id, ledger_id, happened_at, type, account_id, category_id, server_version, [ledger_id+happened_at], is_deleted, deleted_at',
+    });
   }
 }
 

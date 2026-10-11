@@ -5,6 +5,7 @@ import { addAmount, billingCycleRange, daysUntilDue, subAmount } from '@ledgeron
 import { engine } from './sync/wiring';
 import { isLoggedIn } from './sync/api';
 import { db } from './db/db';
+import { getActiveLedgerId } from './db/seed';
 import { QuickAdd } from './quickadd';
 import { TodayCard, TransactionList } from './lists';
 import { Reports } from './reports';
@@ -33,9 +34,15 @@ const BANNER_KEY = 'lo_credit_banner_date';
 /** 信用卡还款提醒横幅(M09-F06):有本期账单且 3 天内到期(含逾期)时在首页提醒,当日可关闭 */
 function useCreditAlert() {
   const alert = useLiveQuery(async () => {
-    const cards = (await db.accounts.toArray()).filter((a) => a.type === 'credit_card' && !a.is_archived && a.credit_due_day != null);
-    const txs = await db.transactions.toArray();
+    const ledgerId = await getActiveLedgerId();
+    const cards = (await db.accounts.where('ledger_id').equals(ledgerId).toArray())
+      .filter((a) => a.type === 'credit_card' && !a.is_archived && a.credit_due_day != null);
     const now = new Date();
+    // O5:各卡周期起点取最小值,流水用 [ledger_id+happened_at] 区间下推
+    const minStart = cards.length ? Math.min(...cards.map((a) => billingCycleRange(a.credit_bill_day ?? 1, now).start)) : 0;
+    const txs = cards.length
+      ? await db.transactions.where('[ledger_id+happened_at]').between([ledgerId, minStart], [ledgerId, now.getTime() + 86_400_000]).toArray()
+      : [];
     for (const a of cards) {
       const { start } = billingCycleRange(a.credit_bill_day ?? 1, now);
       const onCard = txs.filter((t) => !t.is_deleted && t.happened_at >= start && (t.account_id === a.id || t.to_account_id === a.id));

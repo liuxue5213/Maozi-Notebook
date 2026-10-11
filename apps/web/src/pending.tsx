@@ -18,12 +18,13 @@ export function PendingPage({ onBack }: { onBack: () => void }) {
 
   const model = useLiveQuery(async () => {
     const ledgerId = await getActiveLedgerId();
-    const rows = (await db.pending_transactions.toArray())
-      .filter((p) => !p.is_deleted && p.ledger_id === ledgerId && p.status === 'pending')
+    // O5:索引下推(ledger_id/status 索引)
+    const rows = (await db.pending_transactions.where('ledger_id').equals(ledgerId).toArray())
+      .filter((p) => !p.is_deleted && p.status === 'pending')
       .sort((a, b) => b.created_at - a.created_at);
     const allCats = await db.categories.where('ledger_id').equals(ledgerId).toArray();
-    const accounts = (await db.accounts.toArray()).filter((a) => !a.is_archived);
-    const txs = await db.transactions.toArray();
+    const accounts = (await db.accounts.where('ledger_id').equals(ledgerId).toArray()).filter((a) => !a.is_archived);
+    const txs = await db.transactions.where('ledger_id').equals(ledgerId).toArray();
     return { rows, cats: allCats.filter((c) => c.kind === 'expense' && !c.is_hidden), accounts, txs };
   }, []);
 
@@ -272,8 +273,8 @@ function ImportWizard({ onClose, txs }: { onClose: () => void; txs: TransactionR
     const now = Date.now();
     // M05-F05 去重:同账本内 dedupe_hash 已存在(任意状态)则跳过,防止重复导入与撞服务端唯一索引
     const existingHashes = new Set(
-      (await db.pending_transactions.toArray())
-        .filter((p) => p.ledger_id === ledgerId && p.dedupe_hash)
+      (await db.pending_transactions.where('ledger_id').equals(ledgerId).toArray())
+        .filter((p) => p.dedupe_hash)
         .map((p) => p.dedupe_hash),
     );
     const fresh: PendingTransactionRow[] = [];
@@ -316,8 +317,9 @@ function ImportWizard({ onClose, txs }: { onClose: () => void; txs: TransactionR
   /** 全部入账(P0 用户诉求,第 33 轮):导入 → 写入待确认池 → 立即全部确认,一步到位 */
   const writeAndConfirmAll = async (): Promise<void> => {
     const fresh = await writePending({ silent: true });
-    const cats = await db.categories.toArray();
-    const accounts = (await db.accounts.toArray()).filter((a) => !a.is_archived);
+    const ledgerId = await getActiveLedgerId();
+    const cats = await db.categories.where('ledger_id').equals(ledgerId).toArray();
+    const accounts = (await db.accounts.where('ledger_id').equals(ledgerId).toArray()).filter((a) => !a.is_archived);
     const ok = await confirmAllSilent(fresh, cats, accounts);
     await alertDialog(`已全部入账 ${ok} 条(去重跳过 ${fresh.length - ok} 条)`);
     onClose();
@@ -472,8 +474,8 @@ function TextImportModal({ onClose }: { onClose: () => void }) {
     const ledgerId = await getActiveLedgerId();
     const now = Date.now();
     const existingHashes = new Set(
-      (await db.pending_transactions.toArray())
-        .filter((p) => p.ledger_id === ledgerId && p.dedupe_hash)
+      (await db.pending_transactions.where('ledger_id').equals(ledgerId).toArray())
+        .filter((p) => p.dedupe_hash)
         .map((p) => p.dedupe_hash),
     );
     const daysInMonth = new Date(preview.year, preview.month, 0).getDate();

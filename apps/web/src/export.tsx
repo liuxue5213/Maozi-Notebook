@@ -29,12 +29,20 @@ function TextLedgerSection({ txs }: { txs: Array<{ happened_at: number }> }) {
 
   const generate = () => {
     const [y, m] = ym.split('-').map(Number);
-    void Promise.all([db.transactions.toArray(), db.categories.toArray()]).then(([rows, cats]) => {
+    void (async () => {
+      // O5:月份范围下推(单行表原全表扫)
+      const ledgerId = await getActiveLedgerId();
+      const monthStart = new Date(y, m - 1, 1).getTime();
+      const monthEnd = new Date(y, m, 1).getTime();
+      const [rows, cats] = await Promise.all([
+        db.transactions.where('[ledger_id+happened_at]').between([ledgerId, monthStart], [ledgerId, monthEnd]).toArray(),
+        db.categories.where('ledger_id').equals(ledgerId).toArray(),
+      ]);
       const catMap = new Map(cats.map((c) => [c.id, c]));
       const text = renderTextLedger(rows, y, m, (id) => catMap.get(id ?? '')?.name ?? '');
       setText(text);
       setCopied(false);
-    });
+    })();
   };
 
   const copy = async () => {

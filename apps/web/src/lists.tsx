@@ -189,8 +189,8 @@ export function TransactionList() {
 
   const recycled = useLiveQuery(
     async () =>
-      (await db.transactions.toArray())
-        .filter((r) => r.is_deleted)
+      // O5:is_deleted/deleted_at 索引(v5),不再全表扫
+      (await db.transactions.where('is_deleted').equals(1).toArray())
         .sort((a, b) => (b.deleted_at ?? 0) - (a.deleted_at ?? 0))
         .slice(0, 100),
   );

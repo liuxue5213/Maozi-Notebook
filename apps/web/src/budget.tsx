@@ -16,10 +16,14 @@ import { confirmDialog } from './ui/dialog';
 async function loadBudgetModel(periodType: BudgetPeriodType = 'monthly'): Promise<BudgetModel | null> {
   const ledgerId = await getActiveLedgerId();
   const { start, end, prevStart } = budgetPeriodRange(periodType);
-  const [budgets, budgetItems, transactions, categories] = await Promise.all([
+  // O5:索引下推 [ledger_id+happened_at],只取上一周期起(结转需要)至本周期末的流水
+  const transactions = await db.transactions
+    .where('[ledger_id+happened_at]')
+    .between([ledgerId, prevStart], [ledgerId, end])
+    .toArray();
+  const [budgets, budgetItems, categories] = await Promise.all([
     db.budgets.toArray(),
     db.budget_items.toArray(),
-    db.transactions.toArray(),
     db.categories.toArray(),
   ]);
   return buildBudgetModel({

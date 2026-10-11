@@ -45,10 +45,13 @@ async function checkBudgetAndCredit(): Promise<void> {
   if (typeof document === 'undefined' || document.hidden) return; // 后台不发
   const ledgerId = await getActiveLedgerId();
   if (!ledgerId) return;
+  // O5:账本范围 + 本月区间下推
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
   const [accounts, txs, budgets] = await Promise.all([
-    db.accounts.toArray(),
-    db.transactions.toArray(),
-    db.budgets.toArray(),
+    db.accounts.where('ledger_id').equals(ledgerId).toArray(),
+    db.transactions.where('[ledger_id+happened_at]').between([ledgerId, monthStart], [ledgerId, now.getTime()]).toArray(),
+    db.budgets.where('ledger_id').equals(ledgerId).toArray(),
   ]);
   const liveTxs = txs.filter((t) => !t.is_deleted);
   const ledgerAccIds = new Set(accounts.filter((a) => a.ledger_id === ledgerId).map((a) => a.id));
@@ -56,8 +59,7 @@ async function checkBudgetAndCredit(): Promise<void> {
   // 1) 预算超支(>=100%)
   const budget = budgets.find((b) => b.ledger_id === ledgerId && !b.is_deleted);
   if (budget) {
-    const items = (await db.budget_items.toArray()).filter((i) => i.budget_id === budget.id && !i.is_deleted);
-    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
+    const items = (await db.budget_items.where('budget_id').equals(budget.id).toArray()).filter((i) => !i.is_deleted);
     const spent = liveTxs
       .filter((t) => t.ledger_id === ledgerId && t.type === 'expense' && !t.exclude_from_budget && t.happened_at >= monthStart)
       .reduce((s, t) => s + Number(t.amount_base), 0);
