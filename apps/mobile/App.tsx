@@ -1043,6 +1043,7 @@ function RecordScreen({ onSaved }: { onSaved: () => void }) {
         />
         <Pressable style={{ ...styles.saveBtn, paddingHorizontal: 12, ...(aiBusyN && styles.disabled) }} onPress={() => {
           void (async () => {
+            if (!(await aiEnabledFlag())) { setMsg('已在「安全与隐私」中关闭 AI 分析'); setTimeout(() => setMsg(null), 2500); return; }
             if (!aiTxt.trim() || aiBusyN) return;
             setAiBusyN(true);
             try {

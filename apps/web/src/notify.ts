@@ -87,6 +87,7 @@ export async function enableDesktopNotify(): Promise<string> {
   if (typeof Notification === 'undefined') return '此浏览器不支持桌面通知';
   const perm = await Notification.requestPermission();
   if (perm !== 'granted') return '通知权限被拒绝,可在浏览器设置中重新开启';
+  startDesktopNotifyLoop(); // 审查修复:开启后立即挂载检查循环(原先需刷新页面才启动)
   await checkBudgetAndCredit();
   return '桌面提醒已开启';
 }
