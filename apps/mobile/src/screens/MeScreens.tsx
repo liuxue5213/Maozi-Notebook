@@ -3,6 +3,7 @@ import { buildBudgetModel, netSavings, type BudgetModel } from '@ledgerone/ledge
 import { isValidAmount, parseTextLedger, reconcileTextLedger, renderTextLedger, billingCycleRange, daysUntilDue, accountBalance, isLiability, dedupeHash, buildCsv, exportFileName, budgetPeriodRange, formatAmount, newId } from '@ledgerone/domain';
 import React, { useCallback, useEffect, useState } from 'react';
 import * as SecureStore from 'expo-secure-store';
+import { isNotifyEnabled, setNotifyEnabled, startNotifyLoop } from '../lib/notify';
 import { AppState, BackHandler, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { useSyncExternalStore } from 'react';
 import { engine, scheduleSync, snapshot, startMobileAutoSync } from '../lib/sync';
@@ -162,6 +163,7 @@ export function SafetyScreen({ onBack, onOpenDead }: { onBack: () => void; onOpe
   const [privStat, setPrivStat] = useState(false);
   const [privCrash, setPrivCrash] = useState(false);
   const [aiOn, setAiOn] = useState(true);
+  const [notifyOn, setNotifyOn] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -173,6 +175,8 @@ export function SafetyScreen({ onBack, onOpenDead }: { onBack: () => void; onOpe
       setPrivStat((await SecureStore.getItemAsync('priv_stat')) === '1');
       setPrivCrash((await SecureStore.getItemAsync('priv_crash')) === '1');
       setAiOn(await aiEnabledFlag());
+      setNotifyOn(await isNotifyEnabled());
+      if (await isNotifyEnabled()) void startNotifyLoop();
     })();
   }, []);
 
@@ -269,6 +273,20 @@ export function SafetyScreen({ onBack, onOpenDead }: { onBack: () => void; onOpe
           </View>
         </View>
       )}
+      <Text style={{ fontSize: 13, fontWeight: '700', color: '#1a1c23', marginTop: 8 }}>提醒</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fff', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 14 }}>
+        <Text style={{ fontSize: 13, color: '#1a1c23', flex: 1 }}>本地提醒(预算超支/还款到期/月初备份)</Text>
+        <Switch value={notifyOn} onValueChange={(v) => {
+          if (v) {
+            void (async () => {
+              try { await setNotifyEnabled(true); setNotifyOn(true); void startNotifyLoop(); flash('提醒已开启'); }
+              catch (e) { flash(e instanceof Error ? e.message : String(e)); }
+            })();
+          } else {
+            void setNotifyEnabled(false); setNotifyOn(false);
+          }
+        }} />
+      </View>
       <Text style={{ fontSize: 13, fontWeight: '700', color: '#1a1c23', marginTop: 8 }}>隐私开关</Text>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fff', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 14 }}>
         <Text style={{ fontSize: 13, color: '#1a1c23', flex: 1 }}>允许 AI 分析我的数据(统计摘要+备注前8字出域;关闭即零出域)</Text>
