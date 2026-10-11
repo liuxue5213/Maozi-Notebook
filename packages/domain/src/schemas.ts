@@ -19,6 +19,13 @@ export const ledgerSchema = z.object({
   type: z.enum(LEDGER_TYPES),
   icon: nullStr,
   sort: z.number().int().nonnegative().default(0),
+    user_id: z.string().optional(),
+    client_version: z.number().int().optional(),
+    server_version: z.number().int().nullable().optional(),
+    is_deleted: z.boolean().optional(),
+    deleted_at: tsNum.nullable().optional(),
+    created_at: tsNum.optional(),
+    updated_at: tsNum.optional(),
 });
 
 export const ledgerMemberSchema = z.object({
@@ -44,6 +51,13 @@ export const accountSchema = z.object({
   credit_bill_day: z.number().int().min(1).max(31).nullable().optional(),
   credit_due_day: z.number().int().min(1).max(31).nullable().optional(),
   credit_limit: amountStr.nullable().optional(),
+    user_id: z.string().optional(),
+    client_version: z.number().int().optional(),
+    server_version: z.number().int().nullable().optional(),
+    is_deleted: z.boolean().optional(),
+    deleted_at: tsNum.nullable().optional(),
+    created_at: tsNum.optional(),
+    updated_at: tsNum.optional(),
 });
 
 export const categorySchema = z.object({
@@ -57,6 +71,13 @@ export const categorySchema = z.object({
   sort: z.number().int().nonnegative().default(0),
   is_hidden: z.boolean().default(false),
   is_preset: z.boolean().default(false),
+    user_id: z.string().optional(),
+    client_version: z.number().int().optional(),
+    server_version: z.number().int().nullable().optional(),
+    is_deleted: z.boolean().optional(),
+    deleted_at: tsNum.nullable().optional(),
+    created_at: tsNum.optional(),
+    updated_at: tsNum.optional(),
 });
 
 export const tagSchema = z.object({
@@ -64,6 +85,13 @@ export const tagSchema = z.object({
   ledger_id: idStr,
   name: z.string().min(1).max(20),
   color: nullStr,
+    user_id: z.string().optional(),
+    client_version: z.number().int().optional(),
+    server_version: z.number().int().nullable().optional(),
+    is_deleted: z.boolean().optional(),
+    deleted_at: tsNum.nullable().optional(),
+    created_at: tsNum.optional(),
+    updated_at: tsNum.optional(),
 });
 
 export const transactionSchema = z.object({
@@ -106,6 +134,13 @@ export const budgetSchema = z.object({
   total_amount: amountStr,
   currency: z.string().length(3).default('CNY'),
   rollover: z.boolean().default(false),
+    user_id: z.string().optional(),
+    client_version: z.number().int().optional(),
+    server_version: z.number().int().nullable().optional(),
+    is_deleted: z.boolean().optional(),
+    deleted_at: tsNum.nullable().optional(),
+    created_at: tsNum.optional(),
+    updated_at: tsNum.optional(),
 });
 
 /** 存钱计划(需求 V1.1-a,与预算正交:预算管支出上限,存钱管结余下限) */
@@ -126,6 +161,13 @@ export const savingsPlanSchema = z.object({
   exclude_oneoff: z.boolean().default(false),
   linked_account_id: idStr.nullable().optional(),
   status: z.enum(['active', 'paused', 'achieved', 'archived']).default('active'),
+    user_id: z.string().optional(),
+    client_version: z.number().int().optional(),
+    server_version: z.number().int().nullable().optional(),
+    is_deleted: z.boolean().optional(),
+    deleted_at: tsNum.nullable().optional(),
+    created_at: tsNum.optional(),
+    updated_at: tsNum.optional(),
 });
 
 export const budgetItemSchema = z.object({
@@ -134,6 +176,13 @@ export const budgetItemSchema = z.object({
   category_id: idStr,
   amount: amountStr,
   used_cached: amountStr.nullable().optional(),
+    user_id: z.string().optional(),
+    client_version: z.number().int().optional(),
+    server_version: z.number().int().nullable().optional(),
+    is_deleted: z.boolean().optional(),
+    deleted_at: tsNum.nullable().optional(),
+    created_at: tsNum.optional(),
+    updated_at: tsNum.optional(),
 });
 
 export const recurringRuleSchema = z.object({
@@ -148,6 +197,13 @@ export const recurringRuleSchema = z.object({
   next_run_at: tsNum,
   paused: z.boolean().default(false),
   last_run_at: nullTs,
+    user_id: z.string().optional(),
+    client_version: z.number().int().optional(),
+    server_version: z.number().int().nullable().optional(),
+    is_deleted: z.boolean().optional(),
+    deleted_at: tsNum.nullable().optional(),
+    created_at: tsNum.optional(),
+    updated_at: tsNum.optional(),
 });
 
 export const attachmentSchema = z.object({
@@ -159,6 +215,13 @@ export const attachmentSchema = z.object({
   size: nullTs,
   sha256: nullStr,
   upload_status: z.enum(ATTACHMENT_UPLOAD_STATUSES).default('local'),
+    user_id: z.string().optional(),
+    client_version: z.number().int().optional(),
+    server_version: z.number().int().nullable().optional(),
+    is_deleted: z.boolean().optional(),
+    deleted_at: tsNum.nullable().optional(),
+    created_at: tsNum.optional(),
+    updated_at: tsNum.optional(),
 });
 
 export const pendingTransactionSchema = z.object({
@@ -170,6 +233,13 @@ export const pendingTransactionSchema = z.object({
   confidence: z.number().min(0).max(1).nullable().optional(),
   dedupe_hash: nullStr,
   status: z.enum(PENDING_STATUSES).default('pending'),
+    user_id: z.string().optional(),
+    client_version: z.number().int().optional(),
+    server_version: z.number().int().nullable().optional(),
+    is_deleted: z.boolean().optional(),
+    deleted_at: tsNum.nullable().optional(),
+    created_at: tsNum.optional(),
+    updated_at: tsNum.optional(),
 });
 
 export const debtSchema = z.object({
@@ -181,6 +251,13 @@ export const debtSchema = z.object({
   repaid: amountStr.default('0'),
   due_at: nullTs,
   transaction_id: nullStr,
+    user_id: z.string().optional(),
+    client_version: z.number().int().optional(),
+    server_version: z.number().int().nullable().optional(),
+    is_deleted: z.boolean().optional(),
+    deleted_at: tsNum.nullable().optional(),
+    created_at: tsNum.optional(),
+    updated_at: tsNum.optional(),
 });
 
 export const reimbursementSchema = z.object({
@@ -190,6 +267,13 @@ export const reimbursementSchema = z.object({
   status: z.enum(REIMBURSEMENT_STATUSES),
   total_amount: amountStr,
   transaction_ids: z.array(z.string()).default([]),
+    user_id: z.string().optional(),
+    client_version: z.number().int().optional(),
+    server_version: z.number().int().nullable().optional(),
+    is_deleted: z.boolean().optional(),
+    deleted_at: tsNum.nullable().optional(),
+    created_at: tsNum.optional(),
+    updated_at: tsNum.optional(),
 });
 
 export const entitySchemas: Record<EntityKind, z.ZodTypeAny> = {
