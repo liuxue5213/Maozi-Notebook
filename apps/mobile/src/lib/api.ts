@@ -187,11 +187,30 @@ export async function isLoggedIn(): Promise<boolean> {
   return !!(await getAccessToken());
 }
 
+/** O5+ 传输超时:RN fetch 无默认超时,服务重启/链路半开时请求可无限挂起,
+ *  引擎 running 守卫随之永久卡死——「立即同步没反应」的根因。30s 超时后本次失败,
+ *  引擎本轮 catch 退出,下轮(手动或 5 分钟自动)重试。 */
+const TRANSPORT_TIMEOUT_MS = 30_000;
+
+async function withTimeout<T>(p: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TRANSPORT_TIMEOUT_MS);
+  try {
+    return await p(ctrl.signal);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function makeTransport(): Promise<SyncTransport> {
   return {
     push: async (changes: ChangeOp[]): Promise<PushResponse> =>
-      (await apiFetch('/v1/sync/push', { method: 'POST', body: JSON.stringify({ changes }) })) as unknown as PushResponse,
+      withTimeout((signal) =>
+        apiFetch('/v1/sync/push', { method: 'POST', body: JSON.stringify({ changes }), signal }) as unknown as Promise<PushResponse>,
+      ),
     pull: async (cursor: number, limit?: number): Promise<PullResponse> =>
-      (await apiFetch(`/v1/sync/pull?cursor=${cursor}&limit=${limit ?? 500}`)) as unknown as PullResponse,
+      withTimeout((signal) =>
+        apiFetch(`/v1/sync/pull?cursor=${cursor}&limit=${limit ?? 500}`, { signal }) as unknown as Promise<PullResponse>,
+      ),
   };
 }
