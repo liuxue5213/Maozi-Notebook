@@ -2,7 +2,7 @@
 import { buildBudgetModel, netSavings, type BudgetModel } from '@ledgerone/ledger-core';
 import { isValidAmount, parseTextLedger, reconcileTextLedger, renderTextLedger, billingCycleRange, daysUntilDue, accountBalance, isLiability, dedupeHash, buildCsv, exportFileName, budgetPeriodRange, formatAmount, newId } from '@ledgerone/domain';
 import type { TransactionRow } from '@ledgerone/domain';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import { AppState, BackHandler, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { useSyncExternalStore } from 'react';
@@ -114,6 +114,20 @@ export function ListScreen({ drillCat, onClearDrill }: { drillCat: string | null
   };
 
   useEffect(() => { setOffset(0); void load(0, true); }, [monthOffset, typeFilter, kw]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 同步完成后自动刷新列表(修复「同步成功但看不到新数据」——pull 落库后列表不重载)
+  const lastSyncSeen = useRef<number | null>(null);
+  useEffect(() => {
+    lastSyncSeen.current = null;
+    const unsub = engine.subscribe(() => {
+      const snap = engine.getSnapshot();
+      if (snap.state === 'idle' && snap.lastSyncAt && snap.lastSyncAt !== lastSyncSeen.current) {
+        lastSyncSeen.current = snap.lastSyncAt;
+        setOffset(0);
+        void load(0, true);
+      }
+    });
+    return unsub;
+  }, [monthOffset, typeFilter, kw, drillCat]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <View style={{ flex: 1 }}>
