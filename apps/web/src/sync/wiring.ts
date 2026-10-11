@@ -92,7 +92,14 @@ async function applyServerRow(entity: EntityKind, row: Record<string, unknown>):
 }
 
 // ===== 对账自检(2026-10-09,Q3 拍板前置):同步完成后本地 vs 服务端逐实体计数比对 =====
-export interface SyncAudit { ok: boolean; diffs: Array<{ entity: string; local: number; server: number }>; at: number }
+export interface SyncAudit {
+  ok: boolean;
+  diffs: Array<{ entity: string; local: number; server: number }>;
+  /** O7 透明化:死信条数 + 冲突副本条数(>0 时首页亮提示直达同步诊断) */
+  deadletter: number;
+  conflictCopies: number;
+  at: number;
+}
 let lastAudit: SyncAudit | null = null;
 const auditListeners = new Set<() => void>();
 
@@ -117,7 +124,10 @@ async function auditCounts(): Promise<void> {
       const server = Number(stats[entity] ?? 0);
       if (local !== server) diffs.push({ entity, local, server });
     }
-    lastAudit = { ok: diffs.length === 0, diffs, at: Date.now() };
+    // O7 透明化:死信 + 冲突副本计数(冲突副本 = conflict_ 前缀 id 的流水副本)
+    const deadletter = await db.deadletter.count();
+    const conflictCopies = await db.transactions.filter((t) => String(t.id).startsWith('conflict_') && !t.is_deleted).count();
+    lastAudit = { ok: diffs.length === 0, diffs, deadletter, conflictCopies, at: Date.now() };
     if (!lastAudit.ok) console.warn('[sync] 对账不一致:', diffs);
     auditListeners.forEach((fn) => fn());
   } catch { /* 对账失败静默:网络/权限问题不应干扰同步主流程 */ }

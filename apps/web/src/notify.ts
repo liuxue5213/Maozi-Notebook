@@ -80,6 +80,12 @@ async function checkBudgetAndCredit(): Promise<void> {
         `「${a.name}」还款日还剩 ${days} 天${days === 0 ? '(就是今天)' : ''},别忘了还款`);
     }
   }
+
+  // Q8: 每月 1 日备份提醒(同月去重)
+  if (today.getDate() === 1) {
+    notify('backup-reminder', '帽子记账本 · 月初备份提醒',
+      '新的一月开始啦,建议到「导出与备份」导出一份 CSV 存档——数据无价,备份无忧');
+  }
 }
 
 /** 启用桌面通知(用户点击触发,浏览器要求必须由手势发起授权) */

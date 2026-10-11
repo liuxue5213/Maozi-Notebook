@@ -8,12 +8,27 @@ export function SyncAuditBanner() {
 
   useEffect(() => subscribeSyncAudit(() => setAudit(getLastSyncAudit())), []);
 
-  if (!audit || audit.ok) return null;
-  return (
-    <div role="alert" style={{ background: 'var(--expense)', color: '#fff', borderRadius: 12, padding: '10px 14px', marginBottom: 10, fontSize: 13 }}>
-      ⚠️ 数据对账不一致：
-      {audit.diffs.map((d) => ` ${d.entity} 本地${d.local}/服务端${d.server}`).join('；')}
-      ——请点「立即同步」重试；反复出现请先导出备份
-    </div>
-  );
+  // O7 透明化:死信/冲突副本非零 → 琥珀色提示(不影响红色对账错误)
+  const attention = (audit?.deadletter ?? 0) + (audit?.conflictCopies ?? 0);
+  if (!audit) return null;
+  if (!audit.ok) {
+    return (
+      <div role="alert" style={{ background: 'var(--expense)', color: '#fff', borderRadius: 12, padding: '10px 14px', marginBottom: 10, fontSize: 13 }}>
+        ⚠️ 数据对账不一致：
+        {audit.diffs.map((d) => ` ${d.entity} 本地${d.local}/服务端${d.server}`).join('；')}
+        ——请点「立即同步」重试；反复出现请先导出备份
+      </div>
+    );
+  }
+  if (attention > 0) {
+    return (
+      <div role="status" style={{ background: '#b45309', color: '#fff', borderRadius: 12, padding: '10px 14px', marginBottom: 10, fontSize: 13 }}>
+        ⓘ 有 {attention} 条记录需要确认
+        {audit.deadletter > 0 ? ` · 死信 ${audit.deadletter} 条` : ''}
+        {audit.conflictCopies > 0 ? ` · 冲突副本 ${audit.conflictCopies} 条` : ''}
+        ——到「我的 → 安全与隐私 → 同步诊断(死信)」查看处理
+      </div>
+    );
+  }
+  return null;
 }
