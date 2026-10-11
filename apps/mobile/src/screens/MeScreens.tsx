@@ -347,16 +347,7 @@ export function MeScreen({ logged, onLogged, syncText, lastSyncAt, onSync, onOpe
       const reachable = await resolveServerUrl(server.trim() || undefined);
       setServer(reachable);
       await setServerUrl(reachable);
-      let data;
-      try {
-        data = await authApi.login(email, password);
-      } catch (loginErr) {
-        const ls = String(loginErr instanceof Error ? loginErr.message : loginErr);
-        // 密码错误(401)不该触发注册兜底
-        if (ls.includes('密码错误') || ls.includes('邮箱或密码错误')) throw loginErr;
-        console.log('[auth] login 失败,转注册:', ls);
-        data = await authApi.register(email, password);
-      }
+      const data = await authApi.login(email, password);
       console.log('[auth] 成功,服务器:', reachable);
       saveSession(data as never);
       // P0-1(第 27 轮):三态换号处理(明确换号清库/纯本地保留/残留清库),与 Web 同策略
@@ -486,7 +477,22 @@ export function MeScreen({ logged, onLogged, syncText, lastSyncAt, onSync, onOpe
           <TextInput style={styles.input} value={password} onChangeText={setPassword} secureTextEntry placeholder="至少 8 位" placeholderTextColor="#b4bac6" />
           {msg && <Text style={{ fontSize: 12, color: /失败|错误|不可达/.test(msg) ? '#d64545' : '#1f9d6c', marginTop: 4 }}>{msg}</Text>}
           <Pressable style={[styles.saveBtn, busy && styles.disabled]} onPress={() => void submit()}>
-            <Text style={styles.saveText}>{busy ? '请稍候…' : '登录(无账号自动注册)'}</Text>
+            <Text style={styles.saveText}>{busy ? '请稍候…' : '登录'}</Text>
+          </Pressable>
+          <Pressable style={{ alignItems: 'center', padding: 6 }} disabled={busy} onPress={() => {
+            void (async () => {
+              if (!email || !password) { setMsg('请先填邮箱和密码'); return; }
+              setBusy(true);
+              try {
+                await authApi.register(email, password);
+                setMsg('注册成功,已自动登录');
+                onLogged(true);
+              } catch (e) {
+                setMsg(e instanceof Error ? e.message : String(e));
+              } finally { setBusy(false); }
+            })();
+          }}>
+            <Text style={{ fontSize: 13, color: '#4361ee' }}>没有账号？注册新账号</Text>
           </Pressable>
         </>
       )}
