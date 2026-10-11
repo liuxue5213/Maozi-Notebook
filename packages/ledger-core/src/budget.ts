@@ -10,6 +10,8 @@ import {
 export interface BudgetModelInput {
   /** 未过滤的预算表数据;内部按 ledger_id / period_type / 软删过滤 */
   budgets: BudgetRow[];
+  /** N1 预算多周期:当前查看的预算周期(默认 monthly,向后兼容既有调用) */
+  periodType?: BudgetRow['period_type'];
   budgetItems: BudgetItemRow[];
   transactions: TransactionRow[];
   categories: CategoryRow[];
@@ -46,12 +48,13 @@ export interface BudgetModel {
  */
 export function buildBudgetModel(input: BudgetModelInput): BudgetModel {
   const { budgets, budgetItems, transactions, categories, ledgerId, periodStart, periodEnd, prevPeriodStart } = input;
+  const activePeriodType = input.periodType ?? 'monthly';
 
   // 同月双行 tie-break(预算恢复 bug ③):双端离线各自建账本月预算会产生两条同月记录,
   // 仅按 period_start 排序时并列顺序取决于输入数组序(两端不同 → 各选各的,表现为「改了又被恢复」)。
   // 规则:period_start 降序 → created_at 降序 → id 降序,两端确定性选中同一条。
   const all = budgets
-    .filter((b) => !b.is_deleted && b.ledger_id === ledgerId && b.period_type === 'monthly')
+    .filter((b) => !b.is_deleted && b.ledger_id === ledgerId && b.period_type === activePeriodType)
     .sort((a, b) =>
       (b.period_start - a.period_start)
       || ((b.created_at ?? 0) - (a.created_at ?? 0))

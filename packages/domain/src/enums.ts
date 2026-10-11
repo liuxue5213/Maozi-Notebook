@@ -28,7 +28,7 @@ export type TransactionSource = (typeof TRANSACTION_SOURCES)[number];
 export const REIMBURSE_STATUSES = ['none', 'pending', 'done'] as const;
 export type ReimburseStatus = (typeof REIMBURSE_STATUSES)[number];
 
-export const BUDGET_PERIOD_TYPES = ['monthly', 'yearly', 'custom'] as const;
+export const BUDGET_PERIOD_TYPES = ['weekly', 'monthly', 'quarterly', 'yearly', 'custom'] as const;
 export type BudgetPeriodType = (typeof BUDGET_PERIOD_TYPES)[number];
 
 export const RECURRING_FREQUENCIES = ['daily', 'weekly', 'monthly', 'quarterly', 'yearly'] as const;

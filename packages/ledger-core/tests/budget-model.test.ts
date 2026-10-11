@@ -237,4 +237,34 @@ describe('buildBudgetModel(端无关预算编排)', () => {
     expect(input([twinA, twinB]).budget?.id).toBe('b-twin');
     expect(input([twinB, twinA]).budget?.id).toBe('b-twin');
   });
+
+  it('N1 多周期:按 periodType 过滤选取,互不串扰', () => {
+    const run = (periodType: 'weekly' | 'monthly' | 'quarterly' | 'yearly') => buildBudgetModel({
+      ...baseInput,
+      periodType,
+      budgets: [
+        budget({ id: 'b-week', period_type: 'weekly', period_start: START, total_amount: '100' }),
+        budget({ id: 'b-month', period_type: 'monthly', period_start: START, total_amount: '200' }),
+        budget({ id: 'b-quarter', period_type: 'quarterly', period_start: START, total_amount: '400' }),
+        budget({ id: 'b-year', period_type: 'yearly', period_start: START, total_amount: '800' }),
+      ],
+      transactions: [],
+    });
+    expect(run('weekly').budget?.total_amount).toBe('100');
+    expect(run('monthly').budget?.total_amount).toBe('200');
+    expect(run('quarterly').budget?.total_amount).toBe('400');
+    expect(run('yearly').budget?.total_amount).toBe('800');
+  });
+
+  it('N1 多周期:不传 periodType 默认 monthly(向后兼容既有调用)', () => {
+    const m = buildBudgetModel({
+      ...baseInput,
+      budgets: [
+        budget({ id: 'b-week', period_type: 'weekly', period_start: START, total_amount: '100' }),
+        budget({ id: 'b-month', period_type: 'monthly', period_start: START, total_amount: '200' }),
+      ],
+      transactions: [],
+    });
+    expect(m.budget?.id).toBe('b-month');
+  });
 });

@@ -6,3 +6,4 @@ export type { ReportModel, ReportModelInput, PeriodKind, TrendBucket, CatAgg } f
 
 export { netSavings, computeSavingsBaseline, allocateSavingsGoal, computeSavingsProgress, suggestCutbacks } from './savings';
 export type { SavingsBaseline, MonthlyTarget, AllocateInput, AllocateResult, SavingsProgress } from './savings';
+export { budgetPeriodRange, type BudgetPeriodRange } from '@ledgerone/domain';

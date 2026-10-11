@@ -1,6 +1,6 @@
 import './src/lib/polyfills'; // 必须最先:uuid@14 裸用全局 crypto,Hermes 没有,必须先垫上
 import { buildBudgetModel, netSavings, type BudgetModel } from '@ledgerone/ledger-core';
-import { isValidAmount, parseTextLedger, reconcileTextLedger, renderTextLedger, billingCycleRange, daysUntilDue, accountBalance, isLiability, dedupeHash, buildCsv, exportFileName } from '@ledgerone/domain';
+import { isValidAmount, parseTextLedger, reconcileTextLedger, renderTextLedger, billingCycleRange, daysUntilDue, accountBalance, isLiability, dedupeHash, buildCsv, exportFileName, budgetPeriodRange, type BudgetPeriodType } from '@ledgerone/domain';
 import React, { useCallback, useEffect, useState } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import { AppState, BackHandler, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
@@ -773,15 +773,14 @@ function BudgetCard() {
   const [catDrafts, setCatDrafts] = useState<Record<string, string>>({});
   const [msg, setMsg] = useState<string | null>(null);
   const [rollover, setRollover] = useState(false);
+  // N1 预算多周期
+  const [periodType, setPeriodType] = useState<BudgetPeriodType>('monthly');
 
-  const loadModel = async () => {
+  const loadModel = async (pt: BudgetPeriodType = 'monthly') => {
     await initDb();
     const ledgerId = await getActiveLedgerId();
     if (!ledgerId) return;
-    const now = new Date();
-    const start = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-    const end = new Date(now.getFullYear(), now.getMonth() + 1, 1).getTime();
-    const prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).getTime();
+    const { start, end, prevStart } = budgetPeriodRange(pt);
     const [budgets, budgetItems, transactions, categories] = await Promise.all([
       db.getAllAsync<Record<string, unknown>>('SELECT * FROM budgets WHERE is_deleted = 0'),
       db.getAllAsync<Record<string, unknown>>('SELECT * FROM budget_items WHERE is_deleted = 0'),
@@ -791,11 +790,11 @@ function BudgetCard() {
     setModel(buildBudgetModel({
       budgets: budgets as never, budgetItems: budgetItems as never,
       transactions: transactions as never, categories: categories as never,
-      ledgerId, periodStart: start, periodEnd: end, prevPeriodStart: prevStart,
+      ledgerId, periodType: pt, periodStart: start, periodEnd: end, prevPeriodStart: prevStart,
     }));
   };
 
-  useEffect(() => { void loadModel(); }, []);
+  useEffect(() => { void loadModel(periodType); }, [periodType]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openEdit = () => {
     const b = model?.budget;
@@ -812,12 +811,11 @@ function BudgetCard() {
     const ledgerId = await getActiveLedgerId();
     if (!ledgerId || !isValidAmount(amount) || Number(amount) <= 0) return;
     const now = Date.now();
-    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
     const b = model?.budget;
     const baseCurrency = ((await metaGet(db, 'base_currency')) as string) ?? 'CNY'; // T-02:跟随账本主币种
     const row = b
       ? { ...b, total_amount: amount, rollover, client_version: Number((b as unknown as Record<string, unknown>).client_version ?? 0) + 1, updated_at: now }
-      : { id: newId(), ledger_id: ledgerId, period_type: 'monthly', period_start: monthStart, total_amount: amount, currency: baseCurrency, rollover, client_version: 1, server_version: null, is_deleted: false, deleted_at: null, created_at: now, updated_at: now };
+      : { id: newId(), ledger_id: ledgerId, period_type: periodType, period_start: budgetPeriodRange(periodType).start, total_amount: amount, currency: baseCurrency, rollover, client_version: 1, server_version: null, is_deleted: false, deleted_at: null, created_at: now, updated_at: now };
     await saveLocal(db, 'budget', row as never, { base: (b as unknown as Record<string, unknown>) ?? undefined }); // base=编辑前快照:三方合并防「后推者赢」恢复旧值
     for (const item of model?.items ?? []) {
       const rec = item as unknown as Record<string, unknown>;
@@ -839,8 +837,16 @@ function BudgetCard() {
   if (!view) {
     return (
       <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 10 }}>
+        <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8 }}>
+          {([['weekly', '周'], ['monthly', '月'], ['quarterly', '季'], ['yearly', '年']] as Array<[BudgetPeriodType, string]>).map(([k, label]) => (
+            <Pressable key={k} onPress={() => setPeriodType(k)}
+              style={{ flex: 1, paddingVertical: 6, borderRadius: 10, alignItems: 'center', backgroundColor: periodType === k ? '#4361ee' : '#eef0f6' }}>
+              <Text style={{ fontSize: 12, color: periodType === k ? '#fff' : '#4a5160' }}>{label}</Text>
+            </Pressable>
+          ))}
+        </View>
         <Pressable onPress={() => setEditing(true)}>
-          <Text style={{ color: '#8a93a5', fontSize: 13 }}>📅 设置本月预算,控制花钱节奏</Text>
+          <Text style={{ color: '#8a93a5', fontSize: 13 }}>📅 设置{periodType === 'weekly' ? '周' : periodType === 'quarterly' ? '季' : periodType === 'yearly' ? '年' : '月'}预算,控制花钱节奏</Text>
         </Pressable>
         {editing && (
           <View style={{ marginTop: 10, gap: 8 }}>
@@ -855,9 +861,17 @@ function BudgetCard() {
   }
   return (
     <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 10 }}>
+      <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8 }}>
+        {([['weekly', '周'], ['monthly', '月'], ['quarterly', '季'], ['yearly', '年']] as Array<[BudgetPeriodType, string]>).map(([k, label]) => (
+          <Pressable key={k} onPress={() => setPeriodType(k)}
+            style={{ flex: 1, paddingVertical: 6, borderRadius: 10, alignItems: 'center', backgroundColor: periodType === k ? '#4361ee' : '#eef0f6' }}>
+            <Text style={{ fontSize: 12, color: periodType === k ? '#fff' : '#4a5160' }}>{label}</Text>
+          </Pressable>
+        ))}
+      </View>
       <Pressable onPress={() => setEditing((v) => !v)}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Text style={{ fontSize: 13, fontWeight: '700', color: '#1a1c23' }}>本月预算 ¥{formatAmount(view.total)}</Text>
+          <Text style={{ fontSize: 13, fontWeight: '700', color: '#1a1c23' }}>{periodType === 'weekly' ? '周' : periodType === 'quarterly' ? '季' : periodType === 'yearly' ? '年' : '月'}预算 ¥{formatAmount(view.total)}</Text>
           <Text style={{ fontSize: 12, color: view.level === 'over' ? '#d64545' : view.level === 'warn' ? '#e67e22' : '#1f9d6c' }}>{view.pct}%</Text>
         </View>
         <View style={{ height: 6, backgroundColor: '#eef0f6', borderRadius: 3, marginVertical: 6 }}>

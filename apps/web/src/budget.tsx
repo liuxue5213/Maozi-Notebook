@@ -1,11 +1,9 @@
 import { cur } from './utils/currency';
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import {
-  forecastBudget, formatAmount, isValidAmount, newId,
+import {forecastBudget, formatAmount, isValidAmount, newId,
   BUDGET_TEMPLATES,
-  type BudgetItemRow, type BudgetRow, type CategoryRow,
-} from '@ledgerone/domain';
+  type BudgetItemRow, type BudgetRow, type CategoryRow, budgetPeriodRange, type BudgetPeriodType } from '@ledgerone/domain';
 // 预算编排口径下沉到共享内核:Web 与 App 调用同一份 buildBudgetModel,避免两端各写一遍
 import { buildBudgetModel, type BudgetModel } from '@ledgerone/ledger-core';
 import { db } from './db/db';
@@ -15,26 +13,22 @@ import { categoryFreq } from './state/freq';
 import { periodRange } from './utils/period';
 import { confirmDialog } from './ui/dialog';
 
-async function loadBudgetModel(): Promise<BudgetModel | null> {
+async function loadBudgetModel(periodType: BudgetPeriodType = 'monthly'): Promise<BudgetModel | null> {
   const ledgerId = await getActiveLedgerId();
-  const { start, end } = periodRange('month');
+  const { start, end, prevStart } = budgetPeriodRange(periodType);
   const [budgets, budgetItems, transactions, categories] = await Promise.all([
     db.budgets.toArray(),
     db.budget_items.toArray(),
     db.transactions.toArray(),
     db.categories.toArray(),
   ]);
-  const prevStart = (() => {
-    const d = new Date(start);
-    d.setMonth(d.getMonth() - 1);
-    return d.getTime();
-  })();
   return buildBudgetModel({
     budgets,
     budgetItems,
     transactions,
     categories,
     ledgerId,
+    periodType,
     periodStart: start,
     periodEnd: end,
     prevPeriodStart: prevStart,
@@ -42,9 +36,17 @@ async function loadBudgetModel(): Promise<BudgetModel | null> {
 }
 
 /** 预算执行卡(M04-F01/F02/F04):总预算 + 分类预算条目、结转、80% 橙 / 100% 红 */
+const BUDGET_PERIODS: Array<{ key: BudgetPeriodType; label: string }> = [
+  { key: 'weekly', label: '周' },
+  { key: 'monthly', label: '月' },
+  { key: 'quarterly', label: '季' },
+  { key: 'yearly', label: '年' },
+];
+
 export function BudgetCard() {
   const [editing, setEditing] = useState(false);
-  const model = useLiveQuery(loadBudgetModel, []);
+  const [periodType, setPeriodType] = useState<BudgetPeriodType>('monthly');
+  const model = useLiveQuery(() => loadBudgetModel(periodType), [periodType]);
 
   if (!model) return null;
   const { budget, items, carryTotal, progress, adjusted } = model;
@@ -52,22 +54,32 @@ export function BudgetCard() {
   if (!budget || !progress || !adjusted) {
     return (
       <>
-        <button className="budget-empty" onClick={() => setEditing(true)}>📅 设置本月预算,控制花钱节奏</button>
-        {editing && <BudgetModal original={null} originalItems={[]} onClose={() => setEditing(false)} />}
+        <div className="type-toggle compact" style={{ marginBottom: 6 }} onClick={(e) => e.stopPropagation()}>
+          {BUDGET_PERIODS.map((p) => (
+            <button key={p.key} className={periodType === p.key ? 'active' : ''} onClick={() => setPeriodType(p.key)}>{p.label}</button>
+          ))}
+        </div>
+        <button className="budget-empty" onClick={() => setEditing(true)}>📅 设置{BUDGET_PERIODS.find((p) => p.key === periodType)?.label}预算,控制花钱节奏</button>
+        {editing && <BudgetModal original={null} originalItems={[]} defaultPeriod={periodType} onClose={() => { setEditing(false); }} />}
       </>
     );
   }
 
   const view = adjusted;
-  const levelText = view.level === 'over' ? '本月预算已超支' : view.level === 'warn' ? '预算即将超支' : null;
-  const forecast = forecastBudget(view.total, view.used, new Date(), periodRange('month').start);
+  const levelText = view.level === 'over' ? '预算已超支' : view.level === 'warn' ? '预算即将超支' : null;
+  const forecast = forecastBudget(view.total, view.used, new Date(), budgetPeriodRange(periodType).start);
 
   return (
     <>
       <div className="budget-card" onClick={() => setEditing(true)}>
+        <div className="type-toggle compact" style={{ marginBottom: 8 }} onClick={(e) => e.stopPropagation()}>
+          {BUDGET_PERIODS.map((p) => (
+            <button key={p.key} className={periodType === p.key ? 'active' : ''} onClick={() => setPeriodType(p.key)}>{p.label}</button>
+          ))}
+        </div>
         <div className="budget-head">
           <span>
-            本月预算 {cur()}{formatAmount(view.total)}
+            {BUDGET_PERIODS.find((p) => p.key === periodType)?.label}预算 {cur()}{formatAmount(view.total)}
             {carryTotal !== '0' && <span className="muted small"> (含结转 {cur()}{formatAmount(carryTotal)})</span>}
           </span>
           <span className={`budget-pct level-${view.level}`}>{view.pct}%</span>
@@ -114,10 +126,13 @@ function BudgetItemName({ categoryId }: { categoryId: string }) {
 function BudgetModal({
   original,
   originalItems,
+  defaultPeriod = 'monthly',
   onClose,
 }: {
   original: BudgetRow | null;
   originalItems: BudgetItemRow[];
+  /** 新建时预选的预算周期(N1);编辑时以 original.period_type 为准 */
+  defaultPeriod?: BudgetPeriodType;
   onClose: () => void;
 }) {
   const [amount, setAmount] = useState(original?.total_amount ?? '');
@@ -147,11 +162,12 @@ function BudgetModal({
     if (original) {
       row = { ...original, total_amount: amount, rollover, client_version: original.client_version + 1, updated_at: now, is_deleted: false, deleted_at: null };
     } else {
+      const periodType = defaultPeriod;
       row = {
         id: newId(),
         ledger_id: ledgerId,
-        period_type: 'monthly',
-        period_start: periodRange('month').start,
+        period_type: periodType,
+        period_start: budgetPeriodRange(periodType).start,
         total_amount: amount,
         currency: 'CNY',
         rollover,
