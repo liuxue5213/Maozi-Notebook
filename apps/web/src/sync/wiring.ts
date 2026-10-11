@@ -142,7 +142,12 @@ export const engine = new SyncEngine({
     },
     count: async () => db.outbox.count(),
   },
-  afterSync: auditCounts,
+  afterSync: async () => {
+    await auditCounts();
+    const deadletter = await db.deadletter.count();
+    const la = getLastSyncAudit();
+    return { auditBad: la?.diffs.length ?? 0, deadletter };
+  },
   sink: {
     applyServerRow,
     getCursor: async () => ((await db.meta.get('sync_cursor'))?.value as number) ?? 0,

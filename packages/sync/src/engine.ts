@@ -22,6 +22,9 @@ export interface SyncEngineSnapshot {
   pending: number;
   lastSyncAt: number | null;
   lastError: string | null;
+  /** 对账自检(O7 透明化):对账不一致的实体数 / 本地死信条数(afterSync 返回后透出) */
+  auditBad?: number;
+  deadletter?: number;
 }
 
 export interface SyncEngineDeps {
@@ -33,7 +36,8 @@ export interface SyncEngineDeps {
   /** 服务端 rejected 的 op(数据非法等):调用方应移入死信隔离,不再重试 */
   onDeadLetter?: (op: ChangeOp, reason?: string) => Promise<void>;
   /** 每轮同步成功结束后调用(对账自检挂载点,2026-10-09) */
-  afterSync?: () => Promise<void>;
+  /** 每轮同步成功结束后调用(对账自检挂载点);返回不一致实体数与死信数将并入快照供 UI 透出 */
+  afterSync?: () => Promise<{ auditBad: number; deadletter: number } | void>;
   batchSize?: number;
   pullBatchSize?: number;
 }
@@ -83,7 +87,10 @@ export class SyncEngine {
         await this.pullAll();
       }
       this.emit({ state: 'idle', lastSyncAt: Date.now() });
-      if (this.deps.afterSync) await this.deps.afterSync();
+      if (this.deps.afterSync) {
+        const audit = await this.deps.afterSync();
+        if (audit) this.emit({ auditBad: audit.auditBad, deadletter: audit.deadletter });
+      }
     } catch (e) {
       this.emit({ state: 'error', lastError: e instanceof Error ? e.message : String(e) });
     } finally {

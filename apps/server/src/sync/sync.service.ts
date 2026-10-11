@@ -226,11 +226,18 @@ export class SyncService {
   /** 对账自检(2026-10-09):按 pull 同口径返回各实体存活行数,客户端同步完成后比对本地计数,
    *  不一致即界面亮红——终结「静默分歧」。 */
   async stats(userId: string): Promise<Record<string, number>> {
+    // 对账口径:仅统计「存活账本」范围内的行——幽灵账本(已软删)的残留子项不计,
+    // 否则客户端(只持有存活账本数据)将永远对不上
     const myLedgerIds = (
       await db
         .select({ ledger_id: s.ledger_members.ledger_id })
         .from(s.ledger_members)
-        .where(and(eq(s.ledger_members.user_id, userId), eq(s.ledger_members.is_deleted, false)))
+        .innerJoin(s.ledgers, eq(s.ledgers.id, s.ledger_members.ledger_id))
+        .where(and(
+          eq(s.ledger_members.user_id, userId),
+          eq(s.ledger_members.is_deleted, false),
+          eq(s.ledgers.is_deleted, false),
+        ))
     )
       .filter((r: any) => !r.is_deleted)
       .map((r: any) => r.ledger_id);
@@ -241,7 +248,7 @@ export class SyncService {
         cfg.kind === 'ledger'
           ? sql`l.id in (${ledgers})`
           : cfg.kind === 'ledger_member'
-            ? sql`l.user_id = ${userId}`
+            ? sql`l.user_id = ${userId} and l.ledger_id in (${ledgers})`
             : sql`l.ledger_id in (${ledgers})`;
       return sql`select ${cfg.kind} as entity, count(*) as n from ${cfg.table} l where l.is_deleted = 0 and ${scope}`;
     });

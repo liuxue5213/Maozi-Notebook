@@ -220,7 +220,7 @@ function AppInner() {
         )}
         {tab === 'list' && <ListScreen drillCat={drillCat} onClearDrill={() => setDrillCat(null)} />}
         {tab === 'report' && <ReportScreen onDrill={(catId) => { setDrillCat(catId); setTab('list'); }} />}
-        {tab === 'me' && <MeScreen key={`me${ledgerEpoch}`} logged={logged} onLogged={(v) => setLogged(v)} onOpen={(p) => setSub(p)} syncText={`${sync.state === 'idle' ? '正常' : sync.state === 'syncing' ? '同步中' : `失败:${sync.lastError ?? ''}`}${sync.pending > 0 ? ` · 待同步 ${sync.pending}` : ''}`} lastSyncAt={sync.lastSyncAt} onSync={() => void engine.syncOnce()} />}
+        {tab === 'me' && <MeScreen key={`me${ledgerEpoch}`} logged={logged} onLogged={(v) => setLogged(v)} onOpen={(p) => setSub(p)} syncText={`${sync.state === 'idle' ? '正常' : sync.state === 'syncing' ? '同步中' : `失败:${sync.lastError ?? ''}`}${sync.pending > 0 ? ` · 待同步 ${sync.pending}` : ''}${sync.deadletter ? ` · 死信 ${sync.deadletter}` : ''}${sync.auditBad ? ` · 对账不一致(${sync.auditBad})请重试同步` : ''}`} lastSyncAt={sync.lastSyncAt} onSync={() => void engine.syncOnce()} />}
       </View>
       <View style={[styles.tabbar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
         {([
