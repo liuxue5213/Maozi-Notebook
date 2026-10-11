@@ -128,6 +128,8 @@ async function auditCounts(): Promise<void> {
     const deadletter = await db.deadletter.count();
     const conflictCopies = await db.transactions.filter((t) => String(t.id).startsWith('conflict_') && !t.is_deleted).count();
     lastAudit = { ok: diffs.length === 0, diffs, deadletter, conflictCopies, at: Date.now() };
+    // 持久化最近一次对账结果:刷新页面后仍可查看(诊断页展示)
+    await db.meta.put({ key: 'last_sync_audit', value: lastAudit });
     if (!lastAudit.ok) console.warn('[sync] 对账不一致:', diffs);
     auditListeners.forEach((fn) => fn());
   } catch { /* 对账失败静默:网络/权限问题不应干扰同步主流程 */ }
