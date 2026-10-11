@@ -20,7 +20,8 @@
             "usesCleartextTraffic": true
           }
         }
-      ]
+      ],
+      "expo-notifications"
     ],
     "ios": {
       "supportsTablet": true,
