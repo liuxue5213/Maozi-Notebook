@@ -1,3 +1,4 @@
+import { getBaseCurrency } from './sync/api';
 import { cur } from './utils/currency';
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -163,7 +164,7 @@ async function repay(creditAccount: AccountRow, amount: string, accounts: Accoun
     member_id: null,
     type: 'transfer',
     amount,
-    currency: 'CNY',
+    currency: getBaseCurrency(),
     amount_base: amount,
     exchange_rate: null,
     category_id: null,
@@ -232,7 +233,7 @@ function AccountEditor({ original, onClose }: { original: AccountRow | null; onC
         type,
         initial_balance: initialBalance,
         initial_date: now,
-        currency: 'CNY',
+        currency: getBaseCurrency(),
         include_in_net: includeInNet,
         is_archived: isArchived,
         sort: 100,

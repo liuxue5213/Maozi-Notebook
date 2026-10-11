@@ -1,3 +1,4 @@
+import { getBaseCurrency } from './sync/api';
 import { cur } from './utils/currency';
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -173,7 +174,7 @@ function BudgetModal({
         period_type: periodType,
         period_start: budgetPeriodRange(periodType).start,
         total_amount: amount,
-        currency: 'CNY',
+        currency: getBaseCurrency(),
         rollover,
         client_version: 1,
         server_version: null,
