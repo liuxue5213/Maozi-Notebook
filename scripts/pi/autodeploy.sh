@@ -1,8 +1,8 @@
 #!/bin/bash
 # LedgerOne 树莓派自动部署:轮询 GitHub Release(pi-latest),有新版本则热切换。
 # 由 ledgerone-autodeploy.timer 每 5 分钟调用;也可手动执行。
-# 策略:下载 → 解压到新目录 → 保留 .env → 原子换目录 → 重启 → 健康检查 → 失败回滚。
-set -u
+# 策略:下载 → 解压到新目录 → 保留 .env → 切换目录 → 重启 → 就绪检查 → 失败回滚。
+set -uo pipefail
 
 REPO="liuxue5213/Maozi-Notebook"
 API="https://api.github.com/repos/${REPO}/releases/tags/pi-latest"
@@ -37,24 +37,38 @@ done
 gzip -t "$WORK/pkg.tar.gz" 2>/dev/null || { log "gzip 校验失败"; rm -f "$WORK/pkg.tar.gz"; exit 1; }
 tar xzf "$WORK/pkg.tar.gz" -C "$WORK" || { log "解压失败"; rm -rf "$WORK"; exit 1; }
 [ -d "$WORK/pi-deploy/dist" ] || { log "包结构异常(缺 dist)"; exit 1; }
+PACKAGE_VER=$(cat "$WORK/pi-deploy/DEPLOY_VERSION" 2>/dev/null) || { log "包结构异常(缺版本)"; exit 1; }
+[ "$PACKAGE_VER" = "$REMOTE_VER" ] || { log "版本与部署包不匹配,跳过本轮"; exit 1; }
 
-# 3) 保留配置,原子切换
+# 3) 保留配置,切换目录
 cp -a "$APP_DIR/.env" "$WORK/pi-deploy/.env" 2>/dev/null || log "警告:无 .env,新包将用默认配置"
 echo "$REMOTE_VER" > "$WORK/pi-deploy/DEPLOY_VERSION"
 OLD="${APP_DIR}_old"
-rm -rf "$OLD"; mv "$APP_DIR" "$OLD" && mv "$WORK/pi-deploy" "$APP_DIR" || { log "目录切换失败"; exit 1; }
+rm -rf "$OLD"
+mv "$APP_DIR" "$OLD" || { log "旧目录备份失败"; exit 1; }
+if ! mv "$WORK/pi-deploy" "$APP_DIR"; then
+  log "新目录切换失败,恢复旧目录"
+  mv "$OLD" "$APP_DIR" || log "严重错误:旧目录恢复失败,需人工处理"
+  exit 1
+fi
 
-# 4) 重启 + 健康检查(最多 60s),失败回滚
-systemctl restart ledgerone
-for i in $(seq 1 12); do
-  sleep 5
-  if curl -fsS --max-time 3 http://127.0.0.1:60505/healthz >/dev/null 2>&1; then
-    log "部署成功:$REMOTE_VER"
-    systemctl is-active --quiet ledgerone || true
-    exit 0
-  fi
-done
-log "健康检查失败,回滚到 $LOCAL_VER"
-rm -rf "$APP_DIR" && mv "$OLD" "$APP_DIR"
-systemctl restart ledgerone
+# 4) 重启 + 就绪检查(最多 60s),失败回滚
+if systemctl restart ledgerone; then
+  for i in $(seq 1 12); do
+    sleep 5
+    if systemctl is-active --quiet ledgerone && curl -fsS --max-time 3 http://127.0.0.1:60505/readyz 2>/dev/null \
+      | python3 -c 'import json,sys; state=json.load(sys.stdin); sys.exit(0 if state.get("ok") is True and state.get("db") is True else 1)' 2>/dev/null; then
+      log "部署成功:$REMOTE_VER"
+      exit 0
+    fi
+  done
+  log "就绪检查失败,回滚到 $LOCAL_VER"
+else
+  log "新版本服务重启失败,回滚到 $LOCAL_VER"
+fi
+if ! rm -rf "$APP_DIR" || ! mv "$OLD" "$APP_DIR"; then
+  log "严重错误:旧版本目录恢复失败,需人工处理"
+  exit 1
+fi
+systemctl restart ledgerone || log "严重错误:旧版本服务重启失败,需人工处理"
 exit 1

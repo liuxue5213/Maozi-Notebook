@@ -1,4 +1,4 @@
-import { Controller, Get, Module } from '@nestjs/common';
+import { Controller, Get, Module, ServiceUnavailableException } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { SkipThrottle, ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { sql } from 'drizzle-orm';
@@ -25,7 +25,7 @@ export class HealthController {
       await db.execute(sql`select 1`);
       return { ok: true, db: true };
     } catch {
-      return { ok: false, db: false };
+      throw new ServiceUnavailableException('数据库不可用');
     }
   }
 }
