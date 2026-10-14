@@ -16,10 +16,11 @@ import { prepareAfterLogin, saveLocal } from '@ledgerone/sqlite-sync';
 import { authApi, aiChat, aiInsights, aiParse, aiEnabledFlag, clearSession, getServerUrl, insecureTransportReason, isLoggedIn, logout as logoutAll, saveSession, setServerUrl, SERVER_PRESETS, resolveServerUrl, setAiEnabled, validateServerUrl } from '../lib/api';
 import { monthRange, type Tab } from './shared';
 import { styles } from './shared';
+import { prepareTextLedgerEntries, type PreparedTextLedgerEntry } from '../lib/text-ledger-import';
 
 export function ImportScreen({ onBack }: { onBack: () => void }) {
   const [text, setText] = useState('');
-  const [parsed, setParsed] = useState<Array<{ day: number; amount: string; name: string; catId: string | null }>>([]);
+  const [parsed, setParsed] = useState<Array<PreparedTextLedgerEntry & { catId: string | null }>>([]);
   const [summary, setSummary] = useState<string | null>(null);
   const [warn, setWarn] = useState<string | null>(null);
   const [done, setDone] = useState<number | null>(null);
@@ -32,16 +33,20 @@ export function ImportScreen({ onBack }: { onBack: () => void }) {
     if (!r.ok) { setWarn(r.reason); return; }
     const d = r.data;
     if (d.entries.length === 0) { setWarn('未解析出任何条目,请检查文本格式'); return; }
+    let prepared: ReturnType<typeof prepareTextLedgerEntries>;
+    try { prepared = prepareTextLedgerEntries(d); }
+    catch (e) { setWarn(e instanceof Error ? e.message : String(e)); return; }
+    if (prepared.entries.length === 0) { setWarn('没有可导入的有效日期'); return; }
     await initDb();
     const ledgerId = await getActiveLedgerId();
     const cats = await db.getAllAsync<{ id: string; name: string }>(
       'SELECT id, name FROM categories WHERE is_deleted = 0 AND ledger_id = ?', [ledgerId]);
     const rec = reconcileTextLedger(d);
     const catIdOf = (name: string): string | null => cats.find((c) => c.name === name)?.id ?? null;
-    setParsed(d.entries.map((e) => ({ ...e, catId: catIdOf(e.name) })));
-    const parts = [`${d.entries.length} 条 · 合计 ¥${formatAmount(d.entries.reduce((a, e) => a + Number(e.amount), 0).toFixed(2))}`];
+    setParsed(prepared.entries.map((e) => ({ ...e, catId: catIdOf(e.name) })));
+    const parts = [`${d.year}年${d.month}月 · ${prepared.entries.length} 条 · 合计 ¥${formatAmount(prepared.entries.reduce((a, e) => a + Number(e.amount), 0).toFixed(2))}`];
     if (rec.unresolvedDiffs.length > 0) parts.push(`⚠ 与手写合计有 ${rec.unresolvedDiffs.length} 处差异(${rec.unresolvedDiffs.map((x) => `${x.label}差${x.diff}`).join('、')})`);
-    if (d.ignoredLines > 0) parts.push(`忽略 ${d.ignoredLines} 行`);
+    if (d.ignoredLines + prepared.invalid > 0) parts.push(`忽略 ${d.ignoredLines + prepared.invalid} 行(无法解析或日期无效)`);
     setSummary(parts.join(' · '));
   };
 
@@ -53,12 +58,11 @@ export function ImportScreen({ onBack }: { onBack: () => void }) {
       await initDb();
       const ledgerId = await getActiveLedgerId();
       const now = Date.now();
-      const year = new Date().getFullYear();
       let added = 0, skipped = 0;
       for (const e of parsed) {
-        const ts = new Date(year, new Date().getMonth(), e.day, 12).getTime();
+        const ts = e.happenedAt;
         if (ts > Date.now()) { skipped++; continue; }
-        const hash = await dedupeHash({ amount: e.amount, happenedAt: ts, accountId: 'import', merchant: e.name });
+        const hash = await dedupeHash({ amount: e.amount, happenedAt: ts, accountId: `text#${e.occurrence}`, merchant: e.name });
         const dup = await db.getAllAsync<{ id: string }>(
           'SELECT id FROM pending_transactions WHERE dedupe_hash = ? AND is_deleted = 0', [hash]);
         if (dup.length) { skipped++; continue; }

@@ -165,8 +165,7 @@ export class AuthService {
 
   async refresh(refreshToken: string): Promise<TokenPair> {
     const hash = sha256Hex(refreshToken);
-    // P1-13:先查吊销/过期外的有效行;查不到时再看「该 token 是否存在但已被吊销」——
-    // 已轮换 token 的重放是盗用强信号 → 吊销该用户全部会话(token 家族连坐),逼迫重新登录
+    // 先查有效令牌;查不到时辨别是否为已轮换令牌,以便记录重放审计。
     const row = (
       await db
         .select()
@@ -186,7 +185,7 @@ export class AuthService {
       }
       throw new AppError('auth.refresh.401', 401, '刷新令牌无效或已过期,请重新登录');
     }
-    // 轮换语义:条件更新吊销(P1-13:rowCount=0 即并发已轮换 → 按重放处理连坐),一次性换新
+    // 轮换语义:条件更新吊销;并发更新失败的一方只收到 401,不影响其他设备。
     const rotated = await db
       .update(s.refresh_tokens)
       .set({ revoked_at: Date.now() })

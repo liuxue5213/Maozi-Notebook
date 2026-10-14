@@ -601,14 +601,14 @@ describe('安全 P1 批次(第 23 轮,Review 2C)', () => {
     void devCode;
   });
 
-  it('P1-13:已轮换 refresh token 重放 → 整族吊销(新签发的 token 一并失效)+ 审计留痕', async () => {
+  it('已轮换 refresh token 重放 → 旧 token 拒绝、新 token 有效并留下审计', async () => {
     const email = `reuse${Date.now()}@test.dev`;
     const r1 = await authService.register({ email, password: 'reusepassword123' });
     const r2 = await authService.refresh(r1.refreshToken); // 轮换:旧 token 吊销
-    // 攻击者重放旧 token → 家族连坐
+    // 旧 token 重放只拒绝该次请求,不挤掉其他设备
     await expect(authService.refresh(r1.refreshToken)).rejects.toMatchObject({ status: 401 });
-    // 受害者手里「合法」的新 token 也被吊销,逼迫重新登录
-    await expect(authService.refresh(r2.refreshToken)).rejects.toMatchObject({ status: 401 });
+    const r3 = await authService.refresh(r2.refreshToken);
+    expect(r3.accessToken).toBeTruthy();
     // 审计:reuse_detected 留痕
     const auditSchema = await import('../src/db/schema');
     const deadline = Date.now() + 3000;
