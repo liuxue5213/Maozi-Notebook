@@ -19,11 +19,11 @@ import { monthRange, PAGE, type Tab } from './shared';
 import { styles } from './shared';
 
 
-export function ListScreen({ drillCat, onClearDrill }: { drillCat: string | null; onClearDrill: () => void }) {
+export function ListScreen({ drillCat, drillMonthOffset = 0, onClearDrill }: { drillCat: string | null; drillMonthOffset?: number; onClearDrill: () => void }) {
   const [rows, setRows] = useState<Array<TransactionRow & { cat_name?: string; cat_icon?: string }>>([]);
   const [listErr, setListErr] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
-  const [monthOffset, setMonthOffset] = useState(0);
+  const [monthOffset, setMonthOffset] = useState(drillMonthOffset);
   const [typeFilter, setTypeFilter] = useState<'all' | 'expense' | 'income'>('all');
   const [kw, setKw] = useState('');
   const [busy, setBusy] = useState(false);
@@ -42,7 +42,6 @@ export function ListScreen({ drillCat, onClearDrill }: { drillCat: string | null
   const [showAdv, setShowAdv] = useState(false);
   const mr = monthRange(monthOffset);
 
-  useEffect(() => { if (drillCat) void load(0, true); }, [drillCat]); // eslint-disable-line react-hooks/exhaustive-deps
   const calDays = (() => {
     const m = new Map<number, number>();
     for (const t of rows) {
@@ -113,7 +112,7 @@ export function ListScreen({ drillCat, onClearDrill }: { drillCat: string | null
     }
   };
 
-  useEffect(() => { setOffset(0); void load(0, true); }, [monthOffset, typeFilter, kw]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setOffset(0); void load(0, true); }, [monthOffset, typeFilter, kw, drillCat]); // eslint-disable-line react-hooks/exhaustive-deps
   // 同步完成后自动刷新列表(修复「同步成功但看不到新数据」——pull 落库后列表不重载)
   const lastSyncSeen = useRef<number | null>(null);
   useEffect(() => {
@@ -149,6 +148,11 @@ export function ListScreen({ drillCat, onClearDrill }: { drillCat: string | null
           <Text style={{ fontSize: 12, color: '#4a5160' }}>筛选 ▾</Text>
         </Pressable>
       </View>
+      {drillCat && (
+        <Pressable onPress={onClearDrill} style={{ alignSelf: 'flex-start', marginLeft: 12, marginTop: 6, paddingVertical: 5, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#edf0fe' }}>
+          <Text style={{ fontSize: 12, color: '#4361ee' }}>分类筛选中 · 点击清除 ×</Text>
+        </Pressable>
+      )}
       {showAdv && (
         <View style={{ paddingHorizontal: 12, paddingVertical: 6, gap: 6, backgroundColor: '#fff', borderRadius: 10, marginHorizontal: 12 }}>
           <View style={{ flexDirection: 'row', gap: 8 }}>

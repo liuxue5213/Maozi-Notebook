@@ -100,7 +100,7 @@ export function RecordScreen({ onSaved }: { onSaved: () => void }) {
       amount: v.toFixed(2), currency: (await metaGet(db, 'base_currency') as string) ?? 'CNY', amount_base: v.toFixed(2), exchange_rate: null,
       category_id: type === 'transfer' ? null : selected,
       account_id: fromAcc ?? (await db.getAllAsync<{ id: string }>('SELECT id FROM accounts WHERE is_deleted = 0 ORDER BY sort LIMIT 1'))[0]?.id ?? '',
-      to_account_id: type === 'transfer' ? toAcc : null, happened_at: now, note: '', is_refunded: 0, refund_of_id: null,
+      to_account_id: type === 'transfer' ? toAcc : null, happened_at: now, note: note.trim(), is_refunded: 0, refund_of_id: null,
       reimburse_status: null, exclude_from_budget: 0, attachment_count: 0, source: 'manual',
       client_version: 1, server_version: null, is_deleted: 0, deleted_at: null, created_at: now, updated_at: now,
     };

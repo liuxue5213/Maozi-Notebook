@@ -1,7 +1,7 @@
 
 import { buildBudgetModel, netSavings, type BudgetModel } from '@ledgerone/ledger-core';
-import { isValidAmount, parseTextLedger, reconcileTextLedger, renderTextLedger, billingCycleRange, daysUntilDue, accountBalance, isLiability, dedupeHash, buildCsv, exportFileName, budgetPeriodRange, formatAmount, newId } from '@ledgerone/domain';
-import React, { useCallback, useEffect, useState } from 'react';
+import { isValidAmount, parseTextLedger, reconcileTextLedger, renderTextLedger, billingCycleRange, daysUntilDue, accountBalance, isLiability, dedupeHash, buildCsv, exportFileName, budgetPeriodRange, formatAmount, newId, type TransactionRow } from '@ledgerone/domain';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import { AppState, BackHandler, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { useSyncExternalStore } from 'react';
@@ -17,7 +17,7 @@ import { authApi, aiChat, aiInsights, aiParse, aiEnabledFlag, clearSession, getS
 import { monthRange, type Tab } from './shared';
 import { styles } from './shared';
 
-export function ReportScreen({ onDrill }: { onDrill: (catId: string) => void }) {
+export function ReportScreen({ onDrill }: { onDrill: (catId: string, monthOffset: number) => void }) {
   const [aiText, setAiText] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
   // N5 对话式查询「问一问」
@@ -28,6 +28,12 @@ export function ReportScreen({ onDrill }: { onDrill: (catId: string) => void }) 
   const [sum, setSum] = useState({ income: 0, expense: 0 });
   const [byCat, setByCat] = useState<Array<{ name: string; icon: string; total: number; pct: number; catId: string | null }>>([]);
   const [busy, setBusy] = useState(false);
+  const [selectedCat, setSelectedCat] = useState<string | null | undefined>(undefined);
+  const [detailRows, setDetailRows] = useState<TransactionRow[]>([]);
+  const [detailCount, setDetailCount] = useState(0);
+  const [detailBusy, setDetailBusy] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const detailRequest = useRef(0);
   const mr = monthRange(monthOffset);
 
   const load = async () => {
@@ -56,7 +62,41 @@ export function ReportScreen({ onDrill }: { onDrill: (catId: string) => void }) 
     }
   };
 
-  useEffect(() => { void load(); }, [monthOffset]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    detailRequest.current += 1;
+    setSelectedCat(undefined);
+    setDetailRows([]);
+    setDetailCount(0);
+    setDetailBusy(false);
+    void load();
+  }, [monthOffset]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const showDetails = async (catId: string | null) => {
+    const request = ++detailRequest.current;
+    if (selectedCat === catId) { setSelectedCat(undefined); setDetailRows([]); setDetailCount(0); setDetailBusy(false); return; }
+    setSelectedCat(catId);
+    setDetailRows([]);
+    setDetailCount(0);
+    setDetailBusy(true);
+    setDetailError(null);
+    try {
+      await initDb();
+      const ledgerId = await getActiveLedgerId();
+      const categoryWhere = catId === null ? 't.category_id IS NULL' : 't.category_id = ?';
+      const rows = await db.getAllAsync<TransactionRow>(
+        `SELECT t.* FROM transactions t WHERE t.is_deleted = 0 AND t.ledger_id = ? AND t.happened_at >= ? AND t.happened_at < ? AND t.type = 'expense' AND ${categoryWhere}`,
+        catId === null ? [ledgerId, mr.start, mr.end] : [ledgerId, mr.start, mr.end, catId],
+      );
+      rows.sort((a, b) => Number(b.happened_at) - Number(a.happened_at));
+      if (request !== detailRequest.current) return;
+      setDetailCount(rows.length);
+      setDetailRows(rows.slice(0, 50));
+    } catch (e) {
+      if (request === detailRequest.current) setDetailError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (request === detailRequest.current) setDetailBusy(false);
+    }
+  };
 
   return (
     <View style={{ flex: 1 }}>
@@ -155,9 +195,9 @@ export function ReportScreen({ onDrill }: { onDrill: (catId: string) => void }) 
           {askAnswer && <Text style={{ fontSize: 12, color: '#1a1c23', lineHeight: 18, marginBottom: 10, backgroundColor: '#f6f7ff', borderRadius: 8, padding: 8 }}>{askAnswer}</Text>}
           {byCat.length === 0 && <Text style={{ color: '#8a93a5', fontSize: 12 }}>本月暂无支出</Text>}
           {byCat.map((c, i) => (
-            <Pressable key={c.name + i} style={{ marginBottom: 10 }} onPress={() => onDrill(String(c.catId ?? ''))}>
+            <Pressable key={c.name + i} style={{ marginBottom: 10 }} onPress={() => void showDetails(c.catId)}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                <Text style={{ fontSize: 12, color: '#1a1c23' }}>{c.icon} {c.name}</Text>
+                <Text style={{ fontSize: 12, color: '#1a1c23' }}>{c.icon} {c.name} {selectedCat === c.catId ? '⌄' : '›'}</Text>
                 <Text style={{ fontSize: 12, color: '#4a5160' }}>¥{formatAmount(String(c.total))}</Text>
               </View>
               <View style={{ height: 6, backgroundColor: '#eef0f6', borderRadius: 3 }}>
@@ -165,6 +205,31 @@ export function ReportScreen({ onDrill }: { onDrill: (catId: string) => void }) 
               </View>
             </Pressable>
           ))}
+          {selectedCat !== undefined && (
+            <View style={{ borderTopWidth: 1, borderTopColor: '#eef0f6', paddingTop: 10, gap: 8 }}>
+              <Text style={{ fontSize: 13, fontWeight: '700', color: '#1a1c23' }}>
+                {byCat.find((c) => c.catId === selectedCat)?.name ?? '未分类'} · 流水明细{detailCount ? `(${detailCount})` : ''}
+              </Text>
+              {detailBusy && <Text style={styles.muted}>加载中…</Text>}
+              {detailError && <Text style={{ color: '#d64545', fontSize: 12 }}>明细加载失败：{detailError}</Text>}
+              {!detailBusy && !detailError && detailRows.length === 0 && <Text style={styles.muted}>暂无流水</Text>}
+              {detailRows.map((row) => (
+                <View key={row.id} style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12, paddingVertical: 5 }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 12, color: '#4a5160' }}>{new Date(row.happened_at).toLocaleString('zh-CN')}</Text>
+                    {!!row.note && <Text style={{ fontSize: 13, color: '#1a1c23', marginTop: 2 }}>{row.note}</Text>}
+                  </View>
+                  <Text style={{ fontSize: 13, color: '#d64545' }}>-¥{formatAmount(String(row.amount))}</Text>
+                </View>
+              ))}
+              {detailCount > 50 && <Text style={styles.muted}>仅显示最近 50 笔</Text>}
+              {selectedCat !== null && detailCount > 0 && (
+                <Pressable onPress={() => onDrill(selectedCat, monthOffset)}>
+                  <Text style={{ color: '#4361ee', fontSize: 13 }}>在明细页查看全部 ›</Text>
+                </Pressable>
+              )}
+            </View>
+          )}
           {busy && <Text style={{ color: '#8a93a5', fontSize: 12 }}>加载中…</Text>}
         </View>
       </ScrollView>
