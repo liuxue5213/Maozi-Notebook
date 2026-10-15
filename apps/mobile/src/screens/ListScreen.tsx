@@ -112,7 +112,7 @@ export function ListScreen({ drillCat, drillMonthOffset = 0, onClearDrill }: { d
     }
   };
 
-  useEffect(() => { setOffset(0); void load(0, true); }, [monthOffset, typeFilter, kw, drillCat]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setOffset(0); void load(0, true); }, [monthOffset, typeFilter, kw, drillCat, view, minAmt, maxAmt, accFilter, dateFrom, dateTo]); // eslint-disable-line react-hooks/exhaustive-deps
   // 同步完成后自动刷新列表(修复「同步成功但看不到新数据」——pull 落库后列表不重载)
   const lastSyncSeen = useRef<number | null>(null);
   useEffect(() => {
@@ -126,7 +126,7 @@ export function ListScreen({ drillCat, drillMonthOffset = 0, onClearDrill }: { d
       }
     });
     return unsub;
-  }, [monthOffset, typeFilter, kw, drillCat]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [monthOffset, typeFilter, kw, drillCat, view, minAmt, maxAmt, accFilter, dateFrom, dateTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <View style={{ flex: 1 }}>
@@ -265,8 +265,8 @@ export function ListScreen({ drillCat, drillMonthOffset = 0, onClearDrill }: { d
                   }
                   patch.note = editNote;
                   void (async () => {
-                    await saveLocal(db, 'transaction', { ...editRow, ...patch } as never);
-                    setEditRow(null); setOffset(0); void load(0, true); scheduleSync();
+                    await saveTx({ ...editRow, ...patch } as never, editRow as never);
+                    setEditRow(null); setOffset(0); await load(0, true); scheduleSync();
                   })();
                 }}>
                 <Text style={styles.saveText}>保存</Text>
@@ -276,7 +276,7 @@ export function ListScreen({ drillCat, drillMonthOffset = 0, onClearDrill }: { d
                   const now = Date.now();
                   void (async () => {
                     await saveLocal(db, 'transaction', { ...editRow, is_deleted: true, deleted_at: now, client_version: Number(editRow.client_version ?? 0) + 1, updated_at: now } as never, { op: 'delete' });
-                    setEditRow(null); setOffset(0); void load(0, true); scheduleSync();
+                    setEditRow(null); setOffset(0); await load(0, true); scheduleSync();
                   })();
                 }}>
                 <Text style={styles.saveText}>删除</Text>

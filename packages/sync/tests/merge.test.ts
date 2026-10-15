@@ -49,6 +49,14 @@ describe('字段级合并(PRD 5.5)', () => {
     expect(conflicts.map((c) => c.field)).toContain('amount');
   });
 
+  it('无基线金额冲突时原币额与折算额整组保留，禁止产生分裂金额', () => {
+    const current = { ...server, amount: '168.38', amount_base: '168.38', currency: 'CNY', exchange_rate: null };
+    const incoming = { ...current, amount: '104.67', amount_base: '104.67' };
+    const { merged, conflicts } = mergeServerRow(current, incoming);
+    expect(conflicts.map((c) => c.field)).toEqual(expect.arrayContaining(['amount', 'amount_base']));
+    expect(merged).toMatchObject({ amount: '168.38', amount_base: '168.38', currency: 'CNY', exchange_rate: null });
+  });
+
   it('null 与 undefined 等价,不产生幻影冲突(可选字段缺省)', () => {
     const { server: row } = { server: { ...server, to_account_id: null } };
     const incoming = { ...row } as typeof row;
@@ -127,6 +135,24 @@ describe('三方字段级合并(第 13 轮,mergeThreeWay)', () => {
     const clientOnly = mergeThreeWay(serverNow, { ...serverNow, amount: '30' }, base);
     expect(clientOnly.conflicts).toHaveLength(0);
     expect(clientOnly.merged.amount).toBe('30');
+  });
+
+  it('携正确基线修改金额时 amount 与 amount_base 一起更新且不产生冲突', () => {
+    const amountBase = { ...base, amount_base: '26.0000', currency: 'CNY', exchange_rate: null };
+    const server = { ...amountBase, server_version: 9 };
+    const incoming = { ...server, amount: '104.67', amount_base: '104.67' };
+    const { merged, conflicts } = mergeThreeWay(server, incoming, amountBase);
+    expect(conflicts).toHaveLength(0);
+    expect(merged).toMatchObject({ amount: '104.67', amount_base: '104.67' });
+  });
+
+  it('并发金额冲突时 amount 与 amount_base 整组保留服务端版本', () => {
+    const amountBase = { ...base, amount_base: '26.0000', currency: 'CNY', exchange_rate: null };
+    const server = { ...amountBase, amount: '200.00', amount_base: '200.00', server_version: 9 };
+    const incoming = { ...amountBase, amount: '104.67', amount_base: '104.67' };
+    const { merged, conflicts } = mergeThreeWay(server, incoming, amountBase);
+    expect(conflicts.map((c) => c.field)).toEqual(expect.arrayContaining(['amount', 'amount_base']));
+    expect(merged).toMatchObject({ amount: '200.00', amount_base: '200.00' });
   });
 
   it('金额数值等价参与判定:base「26」与 server「26.0000」视为未变更', () => {

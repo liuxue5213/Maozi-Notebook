@@ -107,7 +107,9 @@ describe('B4 并发双改不再丢数据', () => {
       op('transaction', txId, 3, { ...base, amount: '30', amount_base: '30', note: '' }, s1),
     ]);
     expect(resA.results[0].status).toBe('conflict'); // 金额为关键字段 → 冲突,服务端保留 26
-    expect(resA.results[0].conflicts).toEqual([{ field: 'amount' }]);
+    expect(resA.results[0].conflicts).toEqual(expect.arrayContaining([
+      { field: 'amount' }, { field: 'amount_base' },
+    ]));
 
     // 设备 B:改备注(base 仍 = s1,因为 B 离线期间不知道 A 已写入)
     const resB = await syncService.push(userId, [
@@ -120,6 +122,7 @@ describe('B4 并发双改不再丢数据', () => {
     const row = pull2.rows.find((r) => r.entity === 'transaction' && (r.row as any).id === txId)!.row as Record<string, unknown>;
     expect(row.note).toBe('B 的备注');
     expect(Number(row.amount)).toBe(26);
+    expect(Number(row.amount_base)).toBe(26); // 原币额与折算额不可被冲突合并拆成两套数值
   });
 
   it('三方合并(第 13 轮):A 携陈旧备注的冲突推送不覆盖 B 较新备注(op.base)', async () => {    const { userId } = await register(`threeway${Date.now()}@test.dev`);

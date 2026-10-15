@@ -105,13 +105,30 @@ export async function enqueueChange(
   deviceId?: string,
   base?: AnyRow | null,
 ): Promise<void> {
+  // 同一实体在一次同步前可能被连续编辑，甚至“编辑后立即删除”。旧实现把每次操作
+  // 全部排进 outbox，服务端会依次处理陈旧版本，金额修改因此被误判为冲突并生成副本。
+  // 合并成最后一次操作，同时保留第一次编辑时的服务端基线，三方合并才有共同祖先。
+  const pending = await db.getAllAsync<{
+    base: string | null; base_version: number | null;
+  }>(
+    'SELECT base, base_version FROM outbox WHERE entity = ? AND entity_id = ? ORDER BY seq LIMIT 1',
+    [entity, String(row.id)],
+  );
+  const hasPending = pending.length > 0;
+  const preservedBase = hasPending ? pending[0].base : (base ? JSON.stringify(base) : null);
+  const preservedBaseVersion = hasPending
+    ? pending[0].base_version
+    : (row.server_version == null ? null : Number(row.server_version));
+  if (hasPending) {
+    await db.runAsync('DELETE FROM outbox WHERE entity = ? AND entity_id = ?', [entity, String(row.id)]);
+  }
   // P0-2(第 27 轮):补 base_version —— 编辑时所见的 server_version,服务端三方合并的并发判定输入
   await db.runAsync(
     'INSERT INTO outbox (entity, entity_id, op, payload, client_version, occurred_at, device_id, base, base_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
     [
       entity, String(row.id), op, JSON.stringify(row), Number(row.client_version ?? 1), Date.now(), deviceId ?? '',
-      base ? JSON.stringify(base) : null,
-      row.server_version == null ? null : Number(row.server_version),
+      preservedBase,
+      preservedBaseVersion,
     ],
   );
 }

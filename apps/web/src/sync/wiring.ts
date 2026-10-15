@@ -23,6 +23,15 @@ export async function enqueue(
   op: 'upsert' | 'delete' = 'upsert',
   base?: Record<string, unknown> | null,
 ): Promise<void> {
+  // 连续编辑/编辑后删除只保留最后一次操作，并沿用第一次编辑的 base。
+  // 否则服务端会依次合并陈旧中间态，正常金额修改也可能生成冲突副本。
+  const sameEntity = (await db.outbox.where('entityId').equals(String(row.id)).toArray())
+    .filter((item) => item.entity === entity)
+    .sort((a, b) => Number(a.seq ?? 0) - Number(b.seq ?? 0));
+  const first = sameEntity[0];
+  if (sameEntity.length) {
+    await db.outbox.bulkDelete(sameEntity.flatMap((item) => item.seq == null ? [] : [item.seq]));
+  }
   await db.outbox.add({
     entity,
     entityId: String(row.id),
@@ -30,8 +39,8 @@ export async function enqueue(
     payload: row,
     // 客户端编辑基线:版本号 + 整行快照(base)。三方合并(第 13 轮)用 base 逐字段对比,
     // 修复「陈旧非关键字段静默覆盖较新修改」;缺省 base 时服务端退化为整载荷 LWW(兼容旧客户端)。
-    baseVersion: row.server_version == null ? null : Number(row.server_version),
-    base: base ?? null,
+    baseVersion: first ? (first.baseVersion ?? null) : (row.server_version == null ? null : Number(row.server_version)),
+    base: first ? (first.base ?? null) : (base ?? null),
     clientVersion: Number(row.client_version ?? 1),
     occurredAt: Date.now(),
     deviceId: getDeviceId(),

@@ -1,7 +1,10 @@
 import { isValidAmount, type FieldConflict } from '@ledgerone/domain';
 
 /** 关键字段:冲突时不自动裁决,保留双方版本(PRD 5.5) */
-const MANUAL_FIELDS = new Set(['type', 'amount', 'happened_at', 'account_id', 'to_account_id', 'currency']);
+const MANUAL_FIELDS = new Set([
+  'type', 'amount', 'amount_base', 'exchange_rate', 'happened_at', 'account_id', 'to_account_id', 'currency',
+]);
+const COUPLED_AMOUNT_FIELDS = ['amount', 'amount_base', 'currency', 'exchange_rate'] as const;
 /** 同步元字段与服务端权威字段:不参与合并 */
 const META_FIELDS = new Set([
   'client_version', 'server_version', 'is_deleted', 'deleted_at', 'created_at', 'updated_at', 'user_id',
@@ -53,6 +56,11 @@ export function mergeServerRow<T extends Record<string, unknown>>(
       continue;
     }
     if (iv !== undefined) merged[k] = iv; // undefined = 客户端未提供;显式 null = 清空
+  }
+  // 原币金额、折算金额、币种和汇率必须作为一组提交。任一字段冲突时整组保留服务端值，
+  // 避免出现 amount=168.38、amount_base=104.67 这种会让明细与预算合计分裂的行。
+  if (conflicts.some((c) => COUPLED_AMOUNT_FIELDS.includes(c.field as typeof COUPLED_AMOUNT_FIELDS[number]))) {
+    for (const field of COUPLED_AMOUNT_FIELDS) merged[field] = server[field];
   }
   return { merged, conflicts };
 }
@@ -121,6 +129,9 @@ export function mergeThreeWay<T extends Record<string, unknown>>(
     }
     // 双方都改:关键字段冲突(双版本并存);非关键字段服务端优先(不丢已收敛的较新值)
     if (MANUAL_FIELDS.has(k)) conflicts.push({ field: k });
+  }
+  if (conflicts.some((c) => COUPLED_AMOUNT_FIELDS.includes(c.field as typeof COUPLED_AMOUNT_FIELDS[number]))) {
+    for (const field of COUPLED_AMOUNT_FIELDS) merged[field] = server[field];
   }
   return { merged, conflicts };
 }

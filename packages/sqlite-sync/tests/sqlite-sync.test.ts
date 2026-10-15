@@ -88,6 +88,37 @@ describe('变更队列', () => {
     const batch = await (await createChangeQueue(db)).take(10);
     expect(batch[0].op).toBe('delete');
   });
+
+  it('连续编辑合并为一个操作并保留首次编辑基线', async () => {
+    const { db } = makeDb();
+    await initSchema(db);
+    const base = sampleTx('t-edit', { amount: '168.38', amount_base: '168.38', server_version: 10 });
+    const first = { ...base, amount: '120.00', amount_base: '120.00', client_version: 2 };
+    const latest = { ...first, amount: '104.67', amount_base: '104.67', client_version: 3 };
+    await saveLocal(db, 'transaction', first, { base });
+    await saveLocal(db, 'transaction', latest, { base: first });
+
+    const batch = await createChangeQueue(db).take(10);
+    expect(batch).toHaveLength(1);
+    expect(batch[0].payload).toMatchObject({ amount: '104.67', amount_base: '104.67' });
+    expect(batch[0].base).toMatchObject({ amount: '168.38', amount_base: '168.38' });
+    expect(batch[0].baseVersion).toBe(10);
+  });
+
+  it('编辑后立即删除只上行最终 delete，不再制造编辑冲突副本', async () => {
+    const { db } = makeDb();
+    await initSchema(db);
+    const base = sampleTx('t-delete', { server_version: 20 });
+    await saveLocal(db, 'transaction', { ...base, amount: '99.00', client_version: 2 }, { base });
+    await saveLocal(db, 'transaction', {
+      ...base, is_deleted: true, deleted_at: NOW, client_version: 3,
+    }, { op: 'delete' });
+
+    const batch = await createChangeQueue(db).take(10);
+    expect(batch).toHaveLength(1);
+    expect(batch[0]).toMatchObject({ entityId: 't-delete', op: 'delete', clientVersion: 3 });
+    expect(batch[0].base).toMatchObject({ amount: '26.00' });
+  });
 });
 
 describe('RowSink 下行落地', () => {
