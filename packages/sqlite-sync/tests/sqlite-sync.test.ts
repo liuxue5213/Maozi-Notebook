@@ -44,6 +44,19 @@ describe('sqlite-sync 建表', () => {
       expect(names).toContain(t);
     }
   });
+
+  it('旧库迁移会按 id 清理重复行并建立唯一索引', async () => {
+    const { db, raw } = makeDb();
+    raw.exec('CREATE TABLE transactions (id TEXT, ledger_id TEXT, happened_at INTEGER, note TEXT)');
+    raw.exec("INSERT INTO transactions (id, ledger_id, happened_at, note) VALUES ('dup', 'l1', 1, 'old'), ('dup', 'l1', 1, 'new')");
+
+    await initSchema(db);
+
+    expect(await db.getAllAsync('SELECT id, note FROM transactions WHERE id = ?', ['dup']))
+      .toEqual([{ id: 'dup', note: 'new' }]);
+    expect(() => raw.prepare("INSERT INTO transactions (id, note) VALUES ('dup', 'again')").run())
+      .toThrow();
+  });
 });
 
 describe('变更队列', () => {
@@ -97,6 +110,19 @@ describe('RowSink 下行落地', () => {
     const p = await db.getAllAsync<Record<string, unknown>>('SELECT * FROM pending_transactions WHERE id = ?', ['p1']);
     expect(typeof p[0].parsed).toBe('string'); // 库里是 JSON 字符串
     expect((decodeRow('pending_transaction', p[0]).parsed as { merchant: string }).merchant).toBe('星巴克');
+  });
+
+  it('重复拉取同一 id 只保留一行并更新到最新服务端版本', async () => {
+    const { db } = makeDb();
+    await initSchema(db);
+    const sink = createRowSink(db);
+    await sink.applyServerRow('transaction', sampleTx('same-id', { note: 'old', server_version: 5 }));
+    await sink.applyServerRow('transaction', sampleTx('same-id', { note: 'new', server_version: 8 }));
+
+    const rows = await db.getAllAsync<{ note: string; server_version: number }>(
+      'SELECT note, server_version FROM transactions WHERE id = ?', ['same-id'],
+    );
+    expect(rows).toEqual([{ note: 'new', server_version: 8 }]);
   });
 
   it('本地有待推送版本时跳过服务端覆盖', async () => {

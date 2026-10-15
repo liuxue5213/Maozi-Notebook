@@ -19,12 +19,20 @@ cd "$(dirname "$0")/.."
 VARIANT="${1:-release}"
 cd apps/mobile/android
 
+# React Native 的 Gradle 打包任务不会稳定追踪 monorepo 共享包的 dist 变化。
+# release 构建前强制重跑 Metro，避免 APK 沿用上一次的 JS bundle。
+bundle_release() {
+  ./gradlew :app:createBundleReleaseJsAndAssets --rerun-tasks "$@" --console=plain
+}
+
 case "$VARIANT" in
   release)
+    bundle_release -PreactNativeArchitectures=arm64-v8a
     ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a --console=plain
     OUT=app/build/outputs/apk/release/app-release.apk
     ;;
   universal)
+    bundle_release
     ./gradlew assembleRelease --console=plain
     OUT=app/build/outputs/apk/release/app-release.apk
     ;;

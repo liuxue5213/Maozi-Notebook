@@ -36,7 +36,10 @@ export const TABLES: Record<EntityKind, { table: string; cols: Array<[string, Co
 
 export function ddlFor(kind: EntityKind): string {
   const t = TABLES[kind];
-  const cols = t.cols.map(([n, ty]) => `${n === 'interval' ? '"interval"' : n} ${ty}`).join(', ');
+  const cols = t.cols.map(([n, ty]) => {
+    const name = n === 'interval' ? '"interval"' : n;
+    return `${name} ${ty}${n === 'id' ? ' PRIMARY KEY' : ''}`;
+  }).join(', ');
   return `CREATE TABLE IF NOT EXISTS ${t.table} (${cols});`;
 }
 

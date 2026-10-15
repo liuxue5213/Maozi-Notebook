@@ -19,6 +19,23 @@ export async function initSchema(db: SQLiteLike): Promise<void> {
       /* column already exists */
     }
   }
+  // 旧版建表遗漏了 id 主键，导致 INSERT OR REPLACE 每次 pull 都追加同一实体：
+  // 明细、预算和报表会随同步次数成倍增长。迁移时按 id 保留最后写入(rowid 最大)
+  // 的版本，再加唯一索引；新库则由 id PRIMARY KEY 直接保证幂等。
+  await db.execAsync('BEGIN IMMEDIATE');
+  try {
+    for (const { table } of Object.values(TABLES)) {
+      await db.execAsync(
+        `DELETE FROM ${table} WHERE id IS NULL OR rowid NOT IN (`
+        + `SELECT MAX(rowid) FROM ${table} WHERE id IS NOT NULL GROUP BY id)`,
+      );
+      await db.execAsync(`CREATE UNIQUE INDEX IF NOT EXISTS ux_${table}_id ON ${table} (id)`);
+    }
+    await db.execAsync('COMMIT');
+  } catch (error) {
+    await db.execAsync('ROLLBACK');
+    throw error;
+  }
 }
 
 export async function metaGet(db: SQLiteLike, key: string): Promise<unknown> {
