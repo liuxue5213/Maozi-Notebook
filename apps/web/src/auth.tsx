@@ -42,7 +42,9 @@ export function AuthModal({ onClose, onAuthed }: { onClose: () => void; onAuthed
           ? await authApi.login(email, password)
           : await authApi.register(email, password, nickname);
       saveTokens(data as Parameters<typeof saveTokens>[0]);
-      await prepareAfterLogin();
+      if (!(await prepareAfterLogin())) {
+        throw new Error(engine.getSnapshot().lastError ?? '首次同步失败,请检查网络后重试');
+      }
       onAuthed();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

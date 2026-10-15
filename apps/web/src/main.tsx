@@ -5,7 +5,7 @@ import { LockGate } from './security';
 import { ErrorBoundary } from './ErrorBoundary';
 import { ensureLocalSeed } from './db/seed';
 import { seedDemoData } from './db/demo';
-import { engine, enqueue } from './sync/wiring';
+import { engine, enqueue, prepareAfterLogin } from './sync/wiring';
 import { runDueRecurring } from './recurring-engine';
 import { startAutoSync } from '@ledgerone/sync';
 import { applyTheme, getThemeMode } from './theme';
@@ -28,8 +28,13 @@ void ensureLocalSeed()
     );
     // 定时兜底同步:每 5 分钟 + 网络恢复时立即触发(登录状态下生效)
     startAutoSync(engine, { isOnline: () => navigator.onLine && !!localStorage.getItem('lo_access') });
+    // 已登录用户每次打开 Web 立即同步并修复历史版本遗留的当前账本指针。
+    if (localStorage.getItem('lo_access')) void prepareAfterLogin();
     window.addEventListener('online', () => {
       if (localStorage.getItem('lo_access')) void engine.syncOnce();
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && localStorage.getItem('lo_access')) void engine.syncOnce();
     });
   });
 

@@ -45,7 +45,7 @@ export interface SyncEngineDeps {
 export class SyncEngine {
   private snapshot: SyncEngineSnapshot = { state: 'idle', pending: 0, lastSyncAt: null, lastError: null };
   private listeners = new Set<() => void>();
-  private running = false;
+  private activeRun: Promise<boolean> | null = null;
 
   constructor(private deps: SyncEngineDeps) {}
 
@@ -72,9 +72,25 @@ export class SyncEngine {
    * 注意:上行未定案时不能推进下行游标(待推送行会被 RowSink 跳过造成永久漏拉),
    * 因此 pullFirst 仅限首登空库场景(cursor=0 时无未定案上行)。
    */
-  async syncOnce(opts?: { pullFirst?: boolean; beforePush?: () => Promise<void> }): Promise<void> {
-    if (this.running) return;
-    this.running = true;
+  syncOnce(opts?: { pullFirst?: boolean; beforePush?: () => Promise<void> }): Promise<boolean> {
+    // 多处同时触发同步时必须等待同一轮结果。旧实现直接 return,登录流程会把
+    // “已有后台同步正在跑”误当成同步成功,随后显示成功但数据尚未收敛。
+    if (this.activeRun) {
+      // 登录首轮携带 pullFirst/beforePush,不能被普通后台同步吞掉。先等当前轮结束,
+      // 再完整执行登录轮；普通的重复触发继续复用当前结果。
+      if (opts?.pullFirst || opts?.beforePush) {
+        return this.activeRun.then(() => this.syncOnce(opts));
+      }
+      return this.activeRun;
+    }
+    const run = this.runOnce(opts);
+    this.activeRun = run.finally(() => {
+      this.activeRun = null;
+    });
+    return this.activeRun;
+  }
+
+  private async runOnce(opts?: { pullFirst?: boolean; beforePush?: () => Promise<void> }): Promise<boolean> {
     try {
       this.emit({ state: 'syncing', lastError: null });
       if (opts?.pullFirst) {
@@ -91,10 +107,11 @@ export class SyncEngine {
         const audit = await this.deps.afterSync();
         if (audit) this.emit({ auditBad: audit.auditBad, deadletter: audit.deadletter });
       }
+      return true;
     } catch (e) {
       this.emit({ state: 'error', lastError: e instanceof Error ? e.message : String(e) });
+      return false;
     } finally {
-      this.running = false;
       await this.refreshPending();
     }
   }

@@ -227,7 +227,7 @@ async function wipeLocal(): Promise<void> {
 }
 
 /** 登录后:换账号清空本地;空库时清掉本地播种,直接以服务端全量为准 */
-export async function prepareAfterLogin(): Promise<void> {
+export async function prepareAfterLogin(): Promise<boolean> {
   const uid = getUserId();
   const last = (await db.meta.get('last_user'))?.value as string | undefined;
   if (uid && last && last !== uid) {
@@ -271,7 +271,8 @@ export async function prepareAfterLogin(): Promise<void> {
     }
     await db.meta.put({ key: 'active_ledger', value: '' }); // 触发兜底重选最早有效账本
   };
-  await engine.syncOnce({ pullFirst: freshInstall, beforePush: dropUnsyncedSeed });
+  const synced = await engine.syncOnce({ pullFirst: freshInstall, beforePush: dropUnsyncedSeed });
+  if (!synced) return false;
   // T-35 首登对齐(与移动端同口径):登录同步完成后,当前账本对齐到该账号「最早创建的已同步账本」。
   // 否则 Web 本地播种的新账本(以及换设备后各自新建的账本)会把两端各锁在各自的账本里——
   // 双端各自 push/pull 正常、徽章显示「同步完成」,内容却完全不同(数据不同步的典型根因)。
@@ -285,4 +286,5 @@ export async function prepareAfterLogin(): Promise<void> {
       console.log('[auth] 账本对齐到最早服务器账本:', earliest.id);
     }
   }
+  return true;
 }

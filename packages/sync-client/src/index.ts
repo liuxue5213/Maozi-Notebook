@@ -75,10 +75,11 @@ export function createApiClient(deps: ApiClientDeps) {
   };
 
   /** auth 端点封装:与 apiFetch 同源(token 注入/错误语义一致) */
+  const normalizeEmail = (email: string) => email.trim().toLowerCase();
   const auth = {
-    login: (email: string, password: string) => apiFetch('/v1/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+    login: (email: string, password: string) => apiFetch('/v1/auth/login', { method: 'POST', body: JSON.stringify({ email: normalizeEmail(email), password }) }),
     register: (email: string, password: string, nickname = '') =>
-      apiFetch('/v1/auth/register', { method: 'POST', body: JSON.stringify({ email, password, nickname }) }),
+      apiFetch('/v1/auth/register', { method: 'POST', body: JSON.stringify({ email: normalizeEmail(email), password, nickname }) }),
     logoutRemote: () => apiFetch('/v1/auth/logout', { method: 'POST', body: '{}' }).catch(() => undefined),
     me: () => apiFetch('/v1/users/me') as Promise<Record<string, unknown>>,
     updateMe: (patch: { nickname?: string; baseCurrency?: string }) =>

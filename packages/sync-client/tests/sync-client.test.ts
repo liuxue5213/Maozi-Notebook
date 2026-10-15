@@ -29,6 +29,26 @@ function makeClient(responses: Array<{ status: number; body: Record<string, unkn
 afterEach(() => vi.unstubAllGlobals());
 
 describe('createApiClient(P1-2)', () => {
+  it('登录和注册统一规范化邮箱,避免两端因大小写或空格产生身份差异', async () => {
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(String(init?.body ?? ''));
+      return jsonResponse(200, { accessToken: 'A', refreshToken: 'R', user: { id: 'u' } });
+    }));
+    const client = createApiClient({
+      getServerUrl: () => 'https://srv',
+      getAccessToken: () => null,
+      getRefreshToken: () => null,
+      onRefreshed: () => undefined,
+    });
+
+    await client.auth.login('  User@Example.COM ', 'password');
+    await client.auth.register('\tUser@Example.COM\n', 'password');
+
+    expect(JSON.parse(bodies[0])).toMatchObject({ email: 'user@example.com' });
+    expect(JSON.parse(bodies[1])).toMatchObject({ email: 'user@example.com' });
+  });
+
   it('携带 Bearer;401 → refresh → 原请求单次重发(带新 token)', async () => {
     const calls: string[] = [];
     const { client, refreshed, fetchMock } = makeClient(

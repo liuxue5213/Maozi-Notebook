@@ -79,19 +79,26 @@ export function scheduleSync(delayMs = 2000): void {
  * 与 Web 的 visibilitychange/online 监听对齐;网络状态由同步失败重试自然兜底(离线优先)。
  */
 let cachedToken = false;
-export function refreshLoginCache(): void {
-  void hasToken().then((t) => (cachedToken = t));
+export async function refreshLoginCache(): Promise<boolean> {
+  cachedToken = await hasToken();
+  return cachedToken;
 }
 let autoSyncStarted = false;
 
 export function startMobileAutoSync(): void {
   if (autoSyncStarted) return; // boot 重试会重复调用,防止叠加定时器/监听
   autoSyncStarted = true;
-  refreshLoginCache();
+  // 已登录用户每次冷启动立即同步。旧实现只更新缓存,首轮要等 5 分钟或切后台再回来。
+  void refreshLoginCache().then((logged) => {
+    if (logged) void engine.syncOnce();
+  });
   startAutoSync(engine, { isOnline: () => cachedToken });
   const sub = AppState.addEventListener('change', (state) => {
-    refreshLoginCache();
-    if (state === 'active' && cachedToken) void engine.syncOnce();
+    if (state === 'active') {
+      void refreshLoginCache().then((logged) => {
+        if (logged) void engine.syncOnce();
+      });
+    }
   });
   void sub; // RN AppState subscription;应用生命周期内常驻
 }

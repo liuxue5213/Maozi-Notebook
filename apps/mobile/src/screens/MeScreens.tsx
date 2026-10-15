@@ -6,7 +6,7 @@ import * as SecureStore from 'expo-secure-store';
 import { isNotifyEnabled, setNotifyEnabled, startNotifyLoop } from '../lib/notify';
 import { AppState, BackHandler, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { useSyncExternalStore } from 'react';
-import { engine, scheduleSync, snapshot, startMobileAutoSync } from '../lib/sync';
+import { engine, refreshLoginCache, scheduleSync, snapshot, startMobileAutoSync } from '../lib/sync';
 import { runDueRecurring } from '../lib/recurring';
 import { evalExpr } from '../lib/calc';
 import { activeLockMode, biometricAuth, biometricAvailable, disableLock, hasPin, isBiometricDisabled, isLockEnabled, enableLock, setBiometricDisabled, setPin, verifyPin } from '../lib/applock';
@@ -335,7 +335,7 @@ export function MeScreen({ logged, onLogged, syncText, lastSyncAt, onSync, onOpe
     });
   }, [logged]);
 
-  const submit = async () => {
+  const submit = async (mode: 'login' | 'register' = 'login') => {
     if (!email || !password) return;
     // T-05:协议白名单,非法地址直接拒绝,不再进故障转移链
     const invalid = validateServerUrl(server);
@@ -347,9 +347,12 @@ export function MeScreen({ logged, onLogged, syncText, lastSyncAt, onSync, onOpe
       const reachable = await resolveServerUrl(server.trim() || undefined);
       setServer(reachable);
       await setServerUrl(reachable);
-      const data = await authApi.login(email, password);
+      const data = mode === 'login'
+        ? await authApi.login(email.trim().toLowerCase(), password)
+        : await authApi.register(email.trim().toLowerCase(), password);
       console.log('[auth] 成功,服务器:', reachable);
-      saveSession(data as never);
+      await saveSession(data as never);
+      await refreshLoginCache();
       // P0-1(第 27 轮):三态换号处理(明确换号清库/纯本地保留/残留清库),与 Web 同策略
       const action = await prepareAfterLogin(db, String((data as { user?: { id?: string } }).user?.id ?? ''));
       if (action === 'wiped') {
@@ -364,7 +367,7 @@ export function MeScreen({ logged, onLogged, syncText, lastSyncAt, onSync, onOpe
       // 并在推送前丢弃从未上行的空种子账本(有真实流水的离线账本不受影响),
       // 否则种子必被推上云,服务端持续滋生同名幽灵账本、两端各锁各的账本
       const freshInstall = Number((await metaGet(db, 'sync_cursor')) ?? 0) === 0;
-      await engine.syncOnce({
+      const synced = await engine.syncOnce({
         pullFirst: freshInstall,
         beforePush: async () => {
           const unsynced = await db.getAllAsync<{ id: string }>(
@@ -387,6 +390,9 @@ export function MeScreen({ logged, onLogged, syncText, lastSyncAt, onSync, onOpe
           resetInitCache();
         },
       });
+      if (!synced) {
+        throw new Error(engine.getSnapshot().lastError ?? '首次同步失败,请检查网络后重试');
+      }
       // 首登收敛:登录同步完成后,当前账本一律对齐到该账号「最早创建的已同步账本」
       // (与 Web 端默认口径一致)。否则手机本地 seed 的新账本一旦 push 上云就永远不会切换,
       // 造成同账号两端各看各的空账本。
@@ -400,7 +406,9 @@ export function MeScreen({ logged, onLogged, syncText, lastSyncAt, onSync, onOpe
         await metaSet(db, 'active_ledger', earliest[0].id);
         console.log('[auth] 账本对齐到最早服务器账本:', earliest[0].id);
       }
-      setMsg(action === 'wiped' ? '检测到账号切换,已清空本地数据并重新同步' : '登录成功,同步已开启');
+      setMsg(action === 'wiped'
+        ? '检测到账号切换,已清空本地数据并重新同步'
+        : mode === 'register' ? '注册成功,数据已同步' : '登录成功,数据已同步');
     } catch (e) {
       const m = e instanceof Error ? e.message : String(e);
       console.log('[auth] 登录/注册失败:', m);
@@ -422,6 +430,9 @@ export function MeScreen({ logged, onLogged, syncText, lastSyncAt, onSync, onOpe
   return (
     <ScrollView contentContainerStyle={styles.form}>
       <Text style={styles.meTitle}>{logged ? `${me?.nickname || me?.email || '已登录'} · 云同步开启` : '未登录 · 纯本地模式'}</Text>
+      {logged && me?.nickname && me.email && (
+        <Text style={styles.muted}>当前账号：{me.email}</Text>
+      )}
       <Text style={styles.muted}>离线也能记账:数据先存本机,连上服务器后自动同步</Text>
       {/* 菜单与 Web「我的」页同构(顺序/命名/副标题一致) */}
       {([
@@ -476,22 +487,10 @@ export function MeScreen({ logged, onLogged, syncText, lastSyncAt, onSync, onOpe
           <Text style={styles.label}>密码</Text>
           <TextInput style={styles.input} value={password} onChangeText={setPassword} secureTextEntry placeholder="至少 8 位" placeholderTextColor="#b4bac6" />
           {msg && <Text style={{ fontSize: 12, color: /失败|错误|不可达/.test(msg) ? '#d64545' : '#1f9d6c', marginTop: 4 }}>{msg}</Text>}
-          <Pressable style={[styles.saveBtn, busy && styles.disabled]} onPress={() => void submit()}>
+          <Pressable style={[styles.saveBtn, busy && styles.disabled]} onPress={() => void submit('login')}>
             <Text style={styles.saveText}>{busy ? '请稍候…' : '登录'}</Text>
           </Pressable>
-          <Pressable style={{ alignItems: 'center', padding: 6 }} disabled={busy} onPress={() => {
-            void (async () => {
-              if (!email || !password) { setMsg('请先填邮箱和密码'); return; }
-              setBusy(true);
-              try {
-                await authApi.register(email, password);
-                setMsg('注册成功,已自动登录');
-                onLogged(true);
-              } catch (e) {
-                setMsg(e instanceof Error ? e.message : String(e));
-              } finally { setBusy(false); }
-            })();
-          }}>
+          <Pressable style={{ alignItems: 'center', padding: 6 }} disabled={busy} onPress={() => void submit('register')}>
             <Text style={{ fontSize: 13, color: '#4361ee' }}>没有账号？注册新账号</Text>
           </Pressable>
         </>

@@ -171,8 +171,50 @@ describe('SyncEngine', () => {
       throw new Error('network down');
     };
     const engine = new SyncEngine({ transport: f.transport, queue: f.changeQueue, sink: f.sink });
-    await engine.syncOnce();
+    expect(await engine.syncOnce()).toBe(false);
     expect(engine.getSnapshot().state).toBe('error');
     expect(engine.getSnapshot().pending).toBe(1);
+  });
+
+  it('并发触发会等待同一轮同步结果,不会提前报告成功', async () => {
+    const f = makeFakes();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let pulls = 0;
+    f.transport.pull = async () => {
+      pulls++;
+      await gate;
+      return { cursor: 0, hasMore: false, rows: [] };
+    };
+    const engine = new SyncEngine({ transport: f.transport, queue: f.changeQueue, sink: f.sink });
+    const first = engine.syncOnce();
+    const second = engine.syncOnce();
+    expect(engine.getSnapshot().state).toBe('syncing');
+    release();
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
+    expect(pulls).toBe(1);
+  });
+
+  it('后台同步进行中遇到登录首轮参数时,会在当前轮后完整执行登录轮', async () => {
+    const f = makeFakes();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let pulls = 0;
+    f.transport.pull = async () => {
+      pulls++;
+      if (pulls === 1) await gate;
+      return { cursor: 0, hasMore: false, rows: [] };
+    };
+    const beforePush = vi.fn(async () => undefined);
+    const engine = new SyncEngine({ transport: f.transport, queue: f.changeQueue, sink: f.sink });
+    const background = engine.syncOnce();
+    const login = engine.syncOnce({ pullFirst: true, beforePush });
+    release();
+
+    expect(await background).toBe(true);
+    expect(await login).toBe(true);
+    expect(beforePush).toHaveBeenCalledTimes(1);
+    expect(pulls).toBe(2); // 后台 pull 一次；登录轮的 pullFirst 再拉一次
   });
 });
