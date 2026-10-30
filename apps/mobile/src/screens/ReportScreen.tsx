@@ -131,14 +131,28 @@ export function ReportScreen({ onDrill }: { onDrill: (catId: string, monthOffset
               onPress={() => {
                 setAiBusy(true); setAiText('');
                 void (async () => {
+                const _lid = await getActiveLedgerId();
+                const _ms = new Date(new Date().getFullYear(), new Date().getMonth() - monthOffset, 1).getTime();
+                const _me = new Date(new Date().getFullYear(), new Date().getMonth() - monthOffset + 1, 1).getTime();
                   try {
                     if (!(await aiEnabledFlag())) { setAiText('已在「安全与隐私」中关闭 AI 分析'); return; }
+                    // N1+: 传当月全部流水明细,让 AI 做笔级分析
+                    const monthTxRows = await db.getAllAsync<{ happened_at: number; amount: string; note: string | null; category_id: string | null }>(
+                      'SELECT happened_at, amount, note, category_id FROM transactions WHERE is_deleted = 0 AND ledger_id = ? AND happened_at >= ? AND happened_at < ? ORDER BY happened_at',
+                      [_lid, _ms, _me]);
+                    const catLkp = new Map((await db.getAllAsync<{ id: string; name: string }>('SELECT id, name FROM categories WHERE is_deleted = 0 AND ledger_id = ?', [_lid])).map((c) => [c.id, c.name]));
+                    const recentTxs = monthTxRows.map((t) => ({
+                      note: (t.note ?? '').slice(0, 8),
+                      amount: t.amount,
+                      date: new Date(t.happened_at).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }),
+                      category: t.category_id ? (catLkp.get(t.category_id) ?? '') : '',
+                    }));
                     const r = await aiInsights({
                       month: monthOffset === 0 ? '本月' : mr.label,
                       income: String(sum.income), expense: String(sum.expense),
                       budget: null,
                       topCategories: byCat.slice(0, 10).map((c) => ({ name: c.name, amount: String(c.total) })),
-                      recentTxs: [],
+                      recentTxs,
                     });
                     setAiText(r.text);
                   } catch (e) { setAiText(`分析失败:${e instanceof Error ? e.message : String(e)}`); }
