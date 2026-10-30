@@ -59,7 +59,7 @@ export class AiService {
     expense: string;
     budget?: string | null;
     topCategories: Array<{ name: string; amount: string }>;
-    recentTxs: Array<{ note: string; amount: string; date: string; category?: string; account?: string }>;
+    recentTxs: Array<{ note: string; amount: string; date: string }>;
     question?: string;
   }): Promise<string> {
     const lines = [
@@ -67,23 +67,11 @@ export class AiService {
       `- 本月收入 ${input.income} 元,支出 ${input.expense} 元`,
       input.budget ? `- 月预算 ${input.budget} 元` : '',
       `- 支出分类排行: ${input.topCategories.map((c) => `${c.name} ${c.amount}元`).join('、') || '无'}`,
-    ]
-    // N1+: 传入全量流水明细(每笔含日期/备注前8字/金额/分类/账户),让 AI 做笔级分析
-    if (input.recentTxs.length) {
-      lines.push(`- 全部流水明细(${input.recentTxs.length} 笔):`)
-      for (const t of input.recentTxs) {
-        // P-1 数据最小化:备注仅保留前 8 字再出域
-        const cat = t.category ? ` 分类=${t.category}` : ''
-        const acc = t.account ? ` 账户=${t.account}` : ''
-        lines.push(`  ${t.date} ${t.note.slice(0, 8)} ${t.amount}元${cat}${acc}`)
-      }
-    }
-    lines.push(
-      input.question
-        ? `- 用户问题: ${input.question}`
-        : '- 请指出:① 单日大额异常消费 ② 小额高频累积模式 ③ 分类占比是否合理 ④ 下月具体建议(含金额)',
-    )
-    return this.chat(lines.join('\n'))
+      // P-1 数据最小化:备注仅保留前 8 字再出域,减少个人信息上传第三方模型
+      `- 最近流水: ${input.recentTxs.slice(0, 15).map((t) => `${t.date} ${t.note.slice(0, 8)} ${t.amount}元`).join(';') || '无'}`,
+      input.question ? `- 用户问题: ${input.question}` : '- 请指出消费结构特点、异常/可优化项,以及下月建议',
+    ].filter(Boolean);
+    return this.chat(lines.join('\n'));
   }
   /** 智能记账解析:自然语言 → 结构化记账信息(金额/类型/分类/备注/日) */
   async parseExpense(text: string, categoryNames: string[]): Promise<{ amount: number; type: 'expense' | 'income'; category: string | null; note: string; day: number | null }> {
