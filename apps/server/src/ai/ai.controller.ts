@@ -12,7 +12,7 @@ const insightSchema = z.object({
   expense: z.string(),
   budget: z.string().nullable().optional(),
   topCategories: z.array(z.object({ name: z.string(), amount: z.string() })).max(15),
-  recentTxs: z.array(z.object({ note: z.string(), amount: z.string(), date: z.string() })).max(30),
+  recentTxs: z.array(z.object({ note: z.string(), amount: z.string(), date: z.string(), category: z.string().optional(), account: z.string().optional() })).max(200),
   question: z.string().max(500).optional(),
 });
 
