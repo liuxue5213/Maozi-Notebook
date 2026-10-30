@@ -1,9 +1,12 @@
 import { cur } from './utils/currency';
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { addAmount, cmpAmount, formatAmount, subAmount, type CategoryRow, type TransactionRow } from '@ledgerone/domain';
+import { addAmount, cmpAmount, formatAmount, subAmount, type CategoryRow, type TransactionRow, budgetPeriodRange, type BudgetPeriodType } from '@ledgerone/domain';
 import { type CatAgg, type PeriodKind } from '@ledgerone/ledger-core';
 import { loadReportModel } from './utils/report-data';
+import { periodRange } from './utils/period';
+import { db } from './db/db';
+import { getActiveLedgerId } from './db/seed';
 
 
 const PERIODS: Array<{ key: PeriodKind; label: string }> = [
@@ -34,7 +37,25 @@ export function Reports() {
     try {
       const { aiInsights } = await import('./sync/api');
       const top = [...model.byTop.entries()].slice(0, 10).map(([id, v]) => ({ name: model.catMap.get(id)?.name ?? id, amount: String(v.amount) }));
-      const r = await aiInsights({ month: `${periodLabel}(${period})`, income: model.income, expense: model.expense, budget: null, topCategories: top, recentTxs: [] });
+      // N1+: 传当月全部流水明细(而非空数组),让 AI 做笔级分析
+      const ledgerId = await getActiveLedgerId();
+      const pr = periodRange(period);
+      const monthTxs = (await db.transactions
+        .where('[ledger_id+happened_at]')
+        .between([ledgerId, pr.start], [ledgerId, pr.end])
+        .toArray()).filter((t) => !t.is_deleted);
+      const catMap2 = new Map((await db.categories.where('ledger_id').equals(ledgerId).toArray()).map((c) => [c.id, c.name]));
+      const accMap2 = new Map((await db.accounts.where('ledger_id').equals(ledgerId).toArray()).map((a) => [a.id, a.name]));
+      const recentTxs = monthTxs
+        .sort((a, b) => a.happened_at - b.happened_at)
+        .map((t) => ({
+          note: (t.note ?? '').slice(0, 8),
+          amount: t.amount,
+          date: new Date(t.happened_at).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }),
+          category: t.category_id ? (catMap2.get(t.category_id) ?? '') : '',
+          account: t.account_id ? (accMap2.get(t.account_id) ?? '') : '',
+        }));
+      const r = await aiInsights({ month: `${periodLabel}(${period})`, income: model.income, expense: model.expense, budget: null, topCategories: top, recentTxs });
       setAiText(r.text);
     } catch (e) {
       setAiText(`分析失败:${e instanceof Error ? e.message : String(e)}`);
